@@ -1,0 +1,5 @@
+# 향후 설정 로더의 입력 예시. 현재 CLI는 이 파일을 읽지 않는다.
+id = "trend"
+version = "1"
+[strategy]
+sma_period = 200

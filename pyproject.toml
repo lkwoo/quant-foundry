@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantfoundry"
+version = "0.1.0"
+description = "Reproducible market data and quantitative screening"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+market-data = ["finance-datareader", "yfinance", "pandas"]
+
+[project.scripts]
+quantfoundry = "quantfoundry.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
