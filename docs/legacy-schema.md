@@ -23,3 +23,15 @@ unknown_legacy로 기록하고 새로운 공급자 데이터와 무검증 혼합
 기존 지표와 RS는 legacy 계산 결과로 구분하고 새 정의로 재계산하여 비교한다.
 stock.update_time/price.insert_time은 거래 완료일이나 상장일을 대신하지 않는다.
 원본과 이관 후 시장별 행 수·날짜 범위·중복·샘플 값을 비교하고 보고서를 남긴다.
+
+## 2026-09-06 읽기 전용 실제 DB 확인
+
+QuantTrading/mydatabase.db의 sqlite_master 조회로 확인했다.
+stock: PRIMARY KEY(market,ticker).
+price/price_detail/rs_rating_history: UNIQUE(ticker,market,date).
+price_detail에는 signal, signal_5_20, signal_5_40, signal_20_40이 실제 존재한다.
+기존 지표 시간 컬럼은 insert_time_time이라는 이름이다.
+price와 RS의 insert_time은 UTC+9, price_detail 기본 시각은 CURRENT_TIMESTAMP다.
+새 DB에서는 insert_time(UTC)으로 통일한다. 원본 DB에는 쓰기를 수행하지 않았다.
+현재 신규 스키마는 DB 핵심 경로를 먼저 완성하기 위해 복합 시장/티커 키를 유지한다.
+내부 종목 ID와 티커 변경 이력은 후속 마이그레이션 범위다.

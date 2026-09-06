@@ -1,0 +1,157 @@
+"""Transactional update functions for the four core tables."""
+import json
+from dataclasses import dataclass
+from ..indicators.spec import FEATURE_COLUMNS
+from ..data.validation import market_name, ticker_name, iso_date, number, session_dates
+from ..indicators.daily import compute_details, VERSION
+
+
+@dataclass(frozen=True)
+class PriceBar:
+    ticker: str
+    date: str
+    adj_close: float
+    volume: float | None = None
+    close: float | None = None
+
+
+@dataclass(frozen=True)
+class PriceUpdate:
+    inserted: int
+    revised: int
+    unchanged: int
+
+
+def update_stock(db, market, tickers):
+    """Record a complete listing observation; missing symbols are retained, not delisted.
+
+    Empty input is rejected. in_current_listing only means present in this snapshot.
+    """
+    market = market_name(market)
+    symbols = tuple(dict.fromkeys(ticker_name(t) for t in tickers))
+    if not symbols:
+        raise ValueError("Empty listing is not a valid market snapshot")
+    with db.transaction() as conn:
+        conn.execute("UPDATE stock SET in_current_listing=0 WHERE market=?", (market,))
+        conn.executemany("INSERT INTO stock(market,ticker,update_time) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(market,ticker) DO UPDATE SET update_time=CURRENT_TIMESTAMP,in_current_listing=1", ((market,t) for t in symbols))
+    return len(symbols)
+
+
+def update_price(db, market, bars, *, source):
+    """Atomic batch upsert. Record revisions and invalidate dependent derived data.
+
+    On error the ENTIRE batch rolls back, including stock rows and invalidation.
+    Mixing price providers is rejected; conversion must be explicit.
+    """
+    market = market_name(market)
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("A price source/adjustment policy is required")
+    inserted = revised = unchanged = 0
+    seen, dirty, checked_sources = set(), {}, set()
+    with db.transaction() as conn:
+        for bar in bars:
+            ticker, day = ticker_name(bar.ticker), iso_date(bar.date)
+            key = ticker, day
+            if key in seen:
+                raise ValueError(f"Duplicate input price: {key}")
+            seen.add(key)
+            values = (number(bar.adj_close, "adj_close", positive=True),
+                      number(bar.volume, "volume", nullable=True),
+                      number(bar.close, "close", positive=True, nullable=True), source)
+            if ticker not in checked_sources:
+                sources = {r[0] for r in conn.execute("SELECT DISTINCT source FROM price WHERE market=? AND ticker=?", (market,ticker))}
+                if sources and sources != {source}:
+                    raise ValueError(f"Price source mismatch for {market}:{ticker}")
+                checked_sources.add(ticker)
+            conn.execute("INSERT INTO stock(market,ticker,update_time) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING", (market,ticker))
+            old = conn.execute("SELECT adj_close,volume,close,source FROM price WHERE ticker=? AND market=? AND date=?", (ticker,market,day)).fetchone()
+            if old is not None and old["source"] != source:
+                raise ValueError(f"Price source mismatch for {market}:{ticker}")
+            if old is not None and tuple(old) == values:
+                unchanged += 1
+                continue
+            if old is not None:
+                conn.execute("INSERT INTO price_revisions(ticker,market,date,old_json,new_json) VALUES(?,?,?,?,?)", (ticker,market,day,json.dumps(dict(old)),json.dumps(dict(zip(("adj_close","volume","close","source"),values)))))
+                revised += 1
+            else:
+                inserted += 1
+            conn.execute("INSERT INTO price(ticker,market,date,adj_close,volume,close,source) VALUES(?,?,?,?,?,?,?) ON CONFLICT(ticker,market,date) DO UPDATE SET adj_close=excluded.adj_close,volume=excluded.volume,close=excluded.close,source=excluded.source,insert_time=CURRENT_TIMESTAMP", (ticker,market,day,*values))
+            dirty[ticker] = min(day, dirty.get(ticker, day))
+        for ticker, day in dirty.items():
+            conn.execute("DELETE FROM price_detail WHERE ticker=? AND market=? AND date>=?", (ticker,market,day))
+        if dirty:
+            conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date>=?", (market,min(dirty.values())))
+    return PriceUpdate(inserted, revised, unchanged)
+
+
+def update_price_detail(db, market, tickers=None):
+    """Rebuild changed instruments from their first stored price, streaming rows.
+
+    A per-instrument transaction publishes all its indicators together. This
+    correctness-first approach handles inserted gaps and historical corrections.
+    Unchanged instruments are skipped. All instruments, including inactive, can rebuild.
+    """
+    market = market_name(market)
+    with db.connection() as conn:
+        symbols = ([ticker_name(t) for t in tickers] if tickers is not None else
+                   [r[0] for r in conn.execute("SELECT DISTINCT ticker FROM price WHERE market=? ORDER BY ticker", (market,))])
+    count = 0
+    columns = ("ticker", "market", "date", "adj_close", "volume", *FEATURE_COLUMNS, "calculation_version")
+    sql = "INSERT INTO price_detail(" + ",".join(columns) + ") VALUES(" + ",".join("?" for _ in columns) + ")"
+    for ticker in dict.fromkeys(symbols):
+        with db.transaction() as conn:
+            missing = conn.execute("SELECT 1 FROM price p LEFT JOIN price_detail d ON (p.ticker=d.ticker AND p.market=d.market AND p.date=d.date) WHERE p.market=? AND p.ticker=? AND (d.date IS NULL OR d.calculation_version<>?) LIMIT 1", (market,ticker,VERSION)).fetchone()
+            if not missing:
+                continue
+            conn.execute("DELETE FROM price_detail WHERE market=? AND ticker=?", (market,ticker))
+            rows = conn.execute("SELECT * FROM price WHERE market=? AND ticker=? ORDER BY date", (market,ticker))
+            conn.executemany(sql, compute_details(rows))
+            count += conn.execute("SELECT count(*) FROM price_detail WHERE market=? AND ticker=?", (market,ticker)).fetchone()[0]
+    return count
+
+
+def update_rs_rating_history(db, market, sessions, *, lookback=252):
+    """Compute the LAST supplied completed session for the current listing universe.
+
+    sessions must be an authoritative exchange calendar (ascending ISO dates).
+    Exactly lookback+1 complete observations are required. Short-history stocks
+    are excluded explicitly; missing interior/current observations abort ranking.
+    Percentile follows legacy PERCENT_RANK: floor(100*(rank-1)/(n-1)), capped at 99.
+    Ties share the lowest rank; a singleton ranks zero. This is current-universe
+    screening, not a point-in-time historical-universe backtest.
+    """
+    market = market_name(market)
+    sessions = session_dates(sessions)
+    if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback < 1 or len(sessions) < lookback + 1:
+        raise ValueError("At least lookback+1 exchange sessions are required")
+    window = sessions[-lookback-1:]
+    start, end = window[0], window[-1]
+    excluded, returns = [], []
+    with db.transaction() as conn:
+        tickers = [r[0] for r in conn.execute("SELECT ticker FROM stock WHERE market=? AND in_current_listing=1 ORDER BY ticker", (market,))]
+        if not tickers:
+            raise ValueError("No current listing universe")
+        for ticker in tickers:
+            prices = {r[0]: r[1] for r in conn.execute("SELECT date,adj_close FROM price WHERE market=? AND ticker=? AND date BETWEEN ? AND ? ORDER BY date", (market,ticker,start,end))}
+            if end not in prices:
+                raise ValueError(f"Missing current price: {ticker}:{end}")
+            first = conn.execute("SELECT MIN(date) FROM price WHERE market=? AND ticker=?", (market,ticker)).fetchone()[0]
+            if first > start:
+                excluded.append(ticker)
+                continue
+            if set(prices) != set(window):
+                raise ValueError(f"Incomplete or off-calendar price window: {ticker}")
+            returns.append((ticker, prices[end] / prices[start] - 1))
+        if not returns:
+            raise ValueError("No instruments have sufficient history")
+        returns.sort(key=lambda item: (item[1], item[0]))
+        universe_json = json.dumps(sorted(t for t, _ in returns))
+        conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date=?", (market,end))
+        previous, rank = None, 0
+        for index, (ticker, value) in enumerate(returns):
+            if previous is None or value != previous:
+                rank = index
+            percentile = min(99, (100 * rank) // (len(returns)-1)) if len(returns)>1 else 0
+            conn.execute("INSERT INTO rs_rating_history(ticker,market,date,rs_percentile,return_12m,lookback,universe_size,universe_json,calculation_version) VALUES(?,?,?,?,?,?,?,?,?)", (ticker,market,end,percentile,value,lookback,len(returns),universe_json,"rs-v1-session-window"))
+            previous = value
+    return {"as_of": end, "ranked": len(returns), "excluded_short_history": excluded}
