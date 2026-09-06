@@ -22,6 +22,9 @@ class DatabaseTests(unittest.TestCase):
             return [dict(row) for row in conn.execute("SELECT * FROM " + table)]
 
     def seed(self, ticker="A", prices=(100, 110, 120), market="NASDAQ"):
+        with self.db.connection() as c:
+            listed=[row[0] for row in c.execute("SELECT ticker FROM stock WHERE market=?",(market,))]
+        update_stock(self.db,market,listed+[ticker])
         bars = [PriceBar(ticker, (date(2024,1,1)+timedelta(days=i)).isoformat(), p, 0)
                 for i,p in enumerate(prices)]
         return update_price(self.db, market, bars, source="fixture")
@@ -44,7 +47,7 @@ class DatabaseTests(unittest.TestCase):
     def test_listing_snapshot_preserves_history_and_reactivation(self):
         update_stock(self.db, " nasdaq ", ["A", "B", "A"])
         update_stock(self.db, "NASDAQ", ["B"])
-        self.assertEqual({r["ticker"]:r["in_current_listing"] for r in self.rows("stock")}, {"A":0,"B":1})
+        self.assertEqual({r["ticker"]:r["in_current_listing"] for r in self.rows("stock")}, {"B":1})
         with self.assertRaises(ValueError): update_stock(self.db, "NASDAQ", [])
         update_stock(self.db, "NASDAQ", ["A", "B"])
         self.assertTrue(all(r["in_current_listing"] for r in self.rows("stock")))
@@ -125,10 +128,12 @@ class DatabaseTests(unittest.TestCase):
 
     def test_rs_missing_session_aborts_and_short_history_reported(self):
         self.seed()
+        update_stock(self.db,"NASDAQ",["A","B"])
         update_price(self.db,"NASDAQ",[PriceBar("B","2024-01-03",10)],source="fixture")
         dates=["2024-01-01","2024-01-02","2024-01-03"]
         result=update_rs_rating_history(self.db,"NASDAQ",dates,lookback=2)
         self.assertEqual(result["excluded_short_history"],["B"])
+        update_stock(self.db,"NASDAQ",["A","B","C"])
         update_price(self.db,"NASDAQ",[PriceBar("C","2024-01-01",10),PriceBar("C","2024-01-03",12)],source="fixture")
         with self.assertRaisesRegex(ValueError,"Incomplete"):
             update_rs_rating_history(self.db,"NASDAQ",dates,lookback=2)

@@ -3,5 +3,5 @@ path = "var/data/quantfoundry.sqlite3"
 
 [update]
 markets = ["KOSPI", "KOSDAQ", "NASDAQ", "NYSE"]
-batch_size = 20
-workers = 1
+start_date = "2024-01-01"
+lookback = 252

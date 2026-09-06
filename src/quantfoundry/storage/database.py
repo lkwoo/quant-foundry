@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 APPLICATION_ID = 0x51464E44
 from ..indicators.spec import FEATURE_COLUMNS
 
@@ -22,13 +22,21 @@ class Database:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             owner = conn.execute("PRAGMA application_id").fetchone()[0]
             if tables:
-                if version != SCHEMA_VERSION or owner != APPLICATION_ID:
+                if version not in (1, SCHEMA_VERSION) or owner != APPLICATION_ID:
                     raise ValueError("Not a supported QuantFoundry DB; legacy migration must be explicit")
+                if version == 1:
+                    # SQLite rewrites price's FK to instruments during this rename.
+                    # No price rows are copied or removed. DDL is transactional.
+                    conn.execute("ALTER TABLE stock RENAME TO instruments")
+                    conn.execute("CREATE TABLE stock (market TEXT NOT NULL, ticker TEXT NOT NULL, update_time TEXT NOT NULL, in_current_listing INTEGER NOT NULL DEFAULT 1 CHECK(in_current_listing IN (0,1)), PRIMARY KEY(market,ticker))")
+                    conn.execute("INSERT INTO stock SELECT market,ticker,update_time,in_current_listing FROM instruments")
+                    conn.execute("PRAGMA user_version=2")
                 conn.commit()
                 return
             statements = [
+                "CREATE TABLE instruments (market TEXT NOT NULL,ticker TEXT NOT NULL,update_time TEXT NOT NULL,PRIMARY KEY(market,ticker))",
                 "CREATE TABLE stock (market TEXT NOT NULL, ticker TEXT NOT NULL, update_time TEXT NOT NULL, in_current_listing INTEGER NOT NULL DEFAULT 1 CHECK(in_current_listing IN (0,1)), PRIMARY KEY(market,ticker))",
-                "CREATE TABLE price (ticker TEXT NOT NULL, market TEXT NOT NULL, date TEXT NOT NULL, adj_close REAL NOT NULL CHECK(adj_close>0), volume REAL CHECK(volume>=0), close REAL CHECK(close>0), source TEXT NOT NULL, insert_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(ticker,market,date), FOREIGN KEY(market,ticker) REFERENCES stock(market,ticker))",
+                "CREATE TABLE price (ticker TEXT NOT NULL, market TEXT NOT NULL, date TEXT NOT NULL, adj_close REAL NOT NULL CHECK(adj_close>0), volume REAL CHECK(volume>=0), close REAL CHECK(close>0), source TEXT NOT NULL, insert_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(ticker,market,date), FOREIGN KEY(market,ticker) REFERENCES instruments(market,ticker))",
                 "CREATE INDEX price_market_date ON price(market,date,ticker)",
                 "CREATE TABLE price_detail (ticker TEXT NOT NULL, market TEXT NOT NULL, date TEXT NOT NULL, adj_close REAL NOT NULL, volume REAL, " + ",".join(c + " REAL" for c in FEATURE_COLUMNS) + ", calculation_version TEXT NOT NULL, insert_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(ticker,market,date), FOREIGN KEY(ticker,market,date) REFERENCES price(ticker,market,date))",
                 "CREATE TABLE rs_rating_history (ticker TEXT NOT NULL, market TEXT NOT NULL, date TEXT NOT NULL, rs_percentile INTEGER NOT NULL CHECK(rs_percentile BETWEEN 0 AND 99), return_12m REAL NOT NULL, lookback INTEGER NOT NULL, universe_size INTEGER NOT NULL, universe_json TEXT NOT NULL, calculation_version TEXT NOT NULL, insert_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(ticker,market,date), FOREIGN KEY(ticker,market,date) REFERENCES price(ticker,market,date))",

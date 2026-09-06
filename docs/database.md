@@ -28,7 +28,7 @@ update_price_detail(db, "NASDAQ")
 
 | 함수 | 역할 |
 |---|---|
-| update_stock(db, market, tickers) | 전체 종목 목록 관측 갱신. 사라진 종목은 삭제하지 않고 현재 목록 포함 여부만 변경 |
+| update_stock(db, market, tickers) | 전체 종목 목록 관측 갱신. 임시 적재 후 해당 시장의 stock을 전체 교체. 가격 이력은 instruments에 연결하여 유지 |
 | update_price(db, market, bars, source=...) | 전달한 가격의 원자적 upsert. 동일 값은 생략, 정정은 이력 기록 |
 | update_price_detail(db, market, tickers=None) | SMA/EMA/MACD/Signal/Stage 계산·저장. 변경 없는 종목은 생략 |
 | update_rs_rating_history(db, market, sessions, lookback=252) | 마지막 거래일의 동일 시장 RS 갱신. 제외된 짧은 이력 종목 반환 |
@@ -48,11 +48,13 @@ sessions.json은 해당 거래소에서 이미 완료된 **실제 거래일**의
 예시 형식: ["2024-01-02", "2024-01-03", "2024-01-04"]. RS 252 계산에는
 최소 253개 세션이 필요하므로 이 짧은 예시는 실 RS 실행용이 아니다.
 휴일을 제외한 거래소 캘린더를 전달해야 한다. 평일 목록을 대신 쓰지 않는다.
-자동 캘린더/장 마감 판단은 아직 미구현이며 caller의 책임이다.
+단일 함수/daily에 sessions를 직접 전달할 때에는 caller의 책임이다.
+인자 없는 update-all CLI는 exchange_calendars로 거래일을 자동 생성한다.
 가격 수집은 보수적으로 호스트 기준 오늘 이전 날짜만 허용한다.
 
 update-prices, update-details, update-rs도 독립 CLI로 제공한다.
-설정 TOML 자동 로딩은 미구현이다. --db/--market/--sessions가 실제 입력이다.
+update-all CLI는 config/settings.toml의 DB·시장·시작일·lookback을 읽는다.
+그 밖의 명령은 --db/--market/--sessions를 명시한다.
 
 ## 신뢰성 정책
 
@@ -109,3 +111,30 @@ update_runs의 상태는 가격 수집 단계의 상태다. 지표/RS의 후속 
 외부 네트워크 없이 임시 SQLite와 공급자 fixture를 사용하여 롤백·멱등성·시장 격리,
 정정 이력·지표 재계산·0 처리·SMA 경계·RS 동률/누락·부분 실패/재시도와 네 테이블
 연속 갱신을 검증한다. 공급자 adapter는 모의 응답으로 날짜 범위 변환도 확인한다.
+
+## 간편 전체 실행
+
+`quantfoundry update-all`: 설정된 네 시장의 네 테이블을 순차 갱신한다.
+거래일 파일과 DB 초기화 명령이 필요 없다. CLI 옵션은 설정을 덮어쓴다.
+캘린더는 exchange_calendars(XKRX, NASDAQ, XNYS)로 생성한다. 임시 휴장 반영은
+패키지 데이터의 최신성에 의존하며, 불일치 시 기존 가격 품질 검사가 실패를 보고한다.
+시장 하나가 실패해도 나머지를 실행한다. 마지막 JSON과 종료 코드로 전체 결과를 확인한다.
+
+## stock 원자적 교체와 스키마 v2
+
+`replace_stock_snapshots(db, {market: tickers, ...})`는 입력된 시장들을 함께 교체한다.
+모든 목록을 확보한 뒤 호출한다. 빈 시장 목록은 오류, 중복 티커는 제거한다.
+TEMP stock_stage 적재·건수 확인 → instruments에 신규 키 등록 → 대상 stock DELETE
+→ stock_stage에서 INSERT → COMMIT. 다른 연결은 중간의 빈 테이블을 보지 않는다.
+반영 트리거가 INSERT를 실패시키는 경우도 테스트하여 기존 행·시각과 다른 시장을 보존함을 확인한다.
+대상에 네 시장을 모두 전달하면 전체 교체이며, 단일 시장 호출은 다른 시장을 보존한다.
+
+스키마 v1→v2는 stock을 instruments로 rename하여 price의 FK 대상을 SQLite가 함께
+변경하게 하고, 현재 목록용 stock을 다시 만든다. 수백만 price 행을 복사/삭제하지 않는다.
+마이그레이션 자체도 트랜잭션이며 이전 stock의 모든 행을 보존한다. 성공적인 다음 목록
+교체에서 현재 없는 행을 제거한다. 기존 in_current_listing 컬럼은 호환 목적으로 유지하지만
+정상 교체된 stock의 모든 행은 1이다. 자동 가격 적재는 instruments만 보충한다.
+
+현재 사용자 DB의 price_detail/RS가 빈 이유는 가격 수집 PARTIAL/FAILED 이후 계산 생략 정책이다.
+이번 수정은 stock 스냅샷의 완전 교체와 실패 시 보존에 한정한다. 가격 API 심볼 변환,
+거래일 불일치, 부분 성공 시 파생 계산 범위는 별도 개선 항목이다.

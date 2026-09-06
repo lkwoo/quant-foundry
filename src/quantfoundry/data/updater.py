@@ -88,14 +88,15 @@ def update_market_prices(db, market, sessions, *, provider=None, attempts=3, ret
     return report
 
 
-def update_all(db, market, sessions, *, provider=None, lookback=252):
+def update_all(db, market, sessions, *, provider=None, lookback=252, refresh_listings=True):
     """Update all four tables. Skip derived updates on partial price retrieval."""
     market = market_name(market)
     sessions = session_dates(sessions)
     if len(sessions) < lookback + 1:
         raise ValueError("Insufficient sessions for requested RS lookback")
     provider = provider or YahooProvider()
-    update_stock(db, market, provider.list_tickers(market))
+    if refresh_listings:
+        update_stock(db, market, provider.list_tickers(market))
     report = update_market_prices(db, market, sessions, provider=provider)
     if report.status != "SUCCESS":
         return {"prices": asdict(report), "details": None, "rs": None}

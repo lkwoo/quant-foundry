@@ -22,19 +22,43 @@ class PriceUpdate:
     unchanged: int
 
 
-def update_stock(db, market, tickers):
-    """Record a complete listing observation; missing symbols are retained, not delisted.
+def replace_stock_snapshots(db, listings):
+    """Stage complete market snapshots and atomically replace selected markets.
 
-    Empty input is rejected. in_current_listing only means present in this snapshot.
+    Every API response must be collected BEFORE calling. Any staging/publish/commit
+    failure rolls back the entire replacement. Other markets and price history stay.
+    Passing all four markets is equivalent to replacing the full stock table.
     """
-    market = market_name(market)
-    symbols = tuple(dict.fromkeys(ticker_name(t) for t in tickers))
-    if not symbols:
-        raise ValueError("Empty listing is not a valid market snapshot")
+    if not listings:
+        raise ValueError("No market snapshots supplied")
+    snapshots = {}
+    for market, tickers in listings.items():
+        name = market_name(market)
+        if name in snapshots:
+            raise ValueError("Duplicate normalized market")
+        if isinstance(tickers, (str, bytes)):
+            raise ValueError("tickers must be a list, not text")
+        symbols = tuple(dict.fromkeys(ticker_name(t) for t in tickers))
+        if not symbols:
+            raise ValueError(f"Empty listing for {name}; old snapshot retained")
+        snapshots[name] = symbols
     with db.transaction() as conn:
-        conn.execute("UPDATE stock SET in_current_listing=0 WHERE market=?", (market,))
-        conn.executemany("INSERT INTO stock(market,ticker,update_time) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT(market,ticker) DO UPDATE SET update_time=CURRENT_TIMESTAMP,in_current_listing=1", ((market,t) for t in symbols))
-    return len(symbols)
+        conn.execute("CREATE TEMP TABLE stock_stage (market TEXT NOT NULL,ticker TEXT NOT NULL,update_time TEXT NOT NULL,PRIMARY KEY(market,ticker))")
+        conn.executemany("INSERT INTO stock_stage VALUES(?,?,CURRENT_TIMESTAMP)",
+                         ((market,ticker) for market,tickers in snapshots.items() for ticker in tickers))
+        expected = sum(len(tickers) for tickers in snapshots.values())
+        if conn.execute("SELECT COUNT(*) FROM stock_stage").fetchone()[0] != expected:
+            raise ValueError("Staged listing count mismatch")
+        conn.execute("INSERT INTO instruments(market,ticker,update_time) SELECT market,ticker,update_time FROM stock_stage WHERE true ON CONFLICT(market,ticker) DO NOTHING")
+        conn.executemany("DELETE FROM stock WHERE market=?", ((market,) for market in snapshots))
+        conn.execute("INSERT INTO stock(market,ticker,update_time,in_current_listing) SELECT market,ticker,update_time,1 FROM stock_stage")
+    return {market:len(tickers) for market,tickers in snapshots.items()}
+
+
+def update_stock(db, market, tickers):
+    """Atomically replace one market's current snapshot; retain other markets."""
+    market = market_name(market)
+    return replace_stock_snapshots(db, {market:tickers})[market]
 
 
 def update_price(db, market, bars, *, source):
@@ -63,7 +87,7 @@ def update_price(db, market, bars, *, source):
                 if sources and sources != {source}:
                     raise ValueError(f"Price source mismatch for {market}:{ticker}")
                 checked_sources.add(ticker)
-            conn.execute("INSERT INTO stock(market,ticker,update_time) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING", (market,ticker))
+            conn.execute("INSERT INTO instruments(market,ticker,update_time) VALUES(?,?,CURRENT_TIMESTAMP) ON CONFLICT DO NOTHING", (market,ticker))
             old = conn.execute("SELECT adj_close,volume,close,source FROM price WHERE ticker=? AND market=? AND date=?", (ticker,market,day)).fetchone()
             if old is not None and old["source"] != source:
                 raise ValueError(f"Price source mismatch for {market}:{ticker}")
