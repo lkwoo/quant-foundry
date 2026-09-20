@@ -112,3 +112,9 @@ update-all도 가격 수집 전에 네 시장의 stock을 한 번에 교체한�
 가격 적재로 stock에 종목이 다시 추가되지 않는다. 기존 QuantFoundry v1 DB는 initialize 시
 트랜잭션으로 v2에 이관한다(stock을 instruments로 rename 후 stock 재생성).
 원본 QuantTrading DB의 이관과는 별개이며 그 DB는 수정하지 않는다.
+
+## DB 테이블·컬럼 설명
+
+전체 한국어 설명은 [스키마 설명](docs/schema-comments.md)에 정리했다.
+DB에서는 `SELECT * FROM schema_comments`로 조회한다. `init-db` 또는 자동 초기화 시
+v1/v2 DB를 v3로 갱신하여 설명을 추가하며 기존 가격·종목 데이터는 변경하지 않는다.

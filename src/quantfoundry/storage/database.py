@@ -3,9 +3,10 @@ from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 APPLICATION_ID = 0x51464E44
 from ..indicators.spec import FEATURE_COLUMNS
+from .comments import sync_comments
 
 
 
@@ -22,7 +23,7 @@ class Database:
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             owner = conn.execute("PRAGMA application_id").fetchone()[0]
             if tables:
-                if version not in (1, SCHEMA_VERSION) or owner != APPLICATION_ID:
+                if version not in (1, 2, SCHEMA_VERSION) or owner != APPLICATION_ID:
                     raise ValueError("Not a supported QuantFoundry DB; legacy migration must be explicit")
                 if version == 1:
                     # SQLite rewrites price's FK to instruments during this rename.
@@ -31,6 +32,8 @@ class Database:
                     conn.execute("CREATE TABLE stock (market TEXT NOT NULL, ticker TEXT NOT NULL, update_time TEXT NOT NULL, in_current_listing INTEGER NOT NULL DEFAULT 1 CHECK(in_current_listing IN (0,1)), PRIMARY KEY(market,ticker))")
                     conn.execute("INSERT INTO stock SELECT market,ticker,update_time,in_current_listing FROM instruments")
                     conn.execute("PRAGMA user_version=2")
+                sync_comments(conn)
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 conn.commit()
                 return
             statements = [
@@ -45,6 +48,7 @@ class Database:
             ]
             for statement in statements:
                 conn.execute(statement)
+            sync_comments(conn)
             conn.execute(f"PRAGMA application_id={APPLICATION_ID}")
             conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             conn.commit()
