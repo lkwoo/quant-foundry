@@ -134,12 +134,15 @@ def update_price_detail(db, market, tickers=None):
     return count
 
 
-def update_rs_rating_history(db, market, sessions, *, lookback=252):
+def update_rs_rating_history(db, market, sessions, *, lookback=252, missing_policy="error"):
     """Compute the LAST supplied completed session for the current listing universe.
 
     sessions must be an authoritative exchange calendar (ascending ISO dates).
     Exactly lookback+1 complete observations are required. Short-history stocks
     are excluded explicitly; missing interior/current observations abort ranking.
+    Opt-in missing_policy="exclude" ranks only complete instruments and returns
+    every exclusion reason. Its distinct calculation_version records this policy.
+    No eligible instruments means no fabricated ranks and INSUFFICIENT_DATA.
     Percentile follows legacy PERCENT_RANK: floor(100*(rank-1)/(n-1)), capped at 99.
     Ties share the lowest rank; a singleton ranks zero. This is current-universe
     screening, not a point-in-time historical-universe backtest.
@@ -150,7 +153,10 @@ def update_rs_rating_history(db, market, sessions, *, lookback=252):
         raise ValueError("At least lookback+1 exchange sessions are required")
     window = sessions[-lookback-1:]
     start, end = window[0], window[-1]
-    excluded, returns = [], []
+    if missing_policy not in ("error", "exclude"):
+        raise ValueError("missing_policy must be error or exclude")
+    excluded, returns, rejected = [], [], {}
+    version = "rs-v1-session-window" if missing_policy == "error" else "rs-v2-eligible-session-window"
     with db.transaction() as conn:
         tickers = [r[0] for r in conn.execute("SELECT ticker FROM stock WHERE market=? AND in_current_listing=1 ORDER BY ticker", (market,))]
         if not tickers:
@@ -158,16 +164,27 @@ def update_rs_rating_history(db, market, sessions, *, lookback=252):
         for ticker in tickers:
             prices = {r[0]: r[1] for r in conn.execute("SELECT date,adj_close FROM price WHERE market=? AND ticker=? AND date BETWEEN ? AND ? ORDER BY date", (market,ticker,start,end))}
             if end not in prices:
+                if missing_policy == "exclude":
+                    rejected[ticker] = "missing_as_of_price"
+                    continue
                 raise ValueError(f"Missing current price: {ticker}:{end}")
             first = conn.execute("SELECT MIN(date) FROM price WHERE market=? AND ticker=?", (market,ticker)).fetchone()[0]
             if first > start:
                 excluded.append(ticker)
+                rejected[ticker] = "insufficient_history"
                 continue
             if set(prices) != set(window):
+                if missing_policy == "exclude":
+                    rejected[ticker] = "incomplete_or_off_calendar_window"
+                    continue
                 raise ValueError(f"Incomplete or off-calendar price window: {ticker}")
             returns.append((ticker, prices[end] / prices[start] - 1))
         if not returns:
-            raise ValueError("No instruments have sufficient history")
+            if missing_policy == "error":
+                raise ValueError("No instruments have sufficient history")
+            conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date=?", (market,end))
+            return {"as_of": end, "ranked": 0, "excluded_short_history": excluded,
+                    "excluded": rejected, "universe_total": len(tickers), "status": "INSUFFICIENT_DATA"}
         returns.sort(key=lambda item: (item[1], item[0]))
         universe_json = json.dumps(sorted(t for t, _ in returns))
         conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date=?", (market,end))
@@ -176,6 +193,8 @@ def update_rs_rating_history(db, market, sessions, *, lookback=252):
             if previous is None or value != previous:
                 rank = index
             percentile = min(99, (100 * rank) // (len(returns)-1)) if len(returns)>1 else 0
-            conn.execute("INSERT INTO rs_rating_history(ticker,market,date,rs_percentile,return_12m,lookback,universe_size,universe_json,calculation_version) VALUES(?,?,?,?,?,?,?,?,?)", (ticker,market,end,percentile,value,lookback,len(returns),universe_json,"rs-v1-session-window"))
+            conn.execute("INSERT INTO rs_rating_history(ticker,market,date,rs_percentile,return_12m,lookback,universe_size,universe_json,calculation_version) VALUES(?,?,?,?,?,?,?,?,?)", (ticker,market,end,percentile,value,lookback,len(returns),universe_json,version))
             previous = value
-    return {"as_of": end, "ranked": len(returns), "excluded_short_history": excluded}
+    return {"as_of": end, "ranked": len(returns), "excluded_short_history": excluded,
+            "excluded": rejected, "universe_total": len(tickers),
+            "status": "PARTIAL_UNIVERSE" if rejected else "COMPLETE"}

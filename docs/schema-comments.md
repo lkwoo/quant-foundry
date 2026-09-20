@@ -92,7 +92,7 @@ price.adj_close 기반의 일별 기술적 지표. 가격 정정 이후 무효�
 | `lookback` | 수익률 계산에 사용한 거래세션 간격. 기본 252이며 시작일·종료일 포함 lookback+1개 가격 관측값이 필요하다. |
 | `universe_size` | 해당 시장·기준일 순위 산정에 실제 참여한 종목 수. 이력이 부족해 제외된 종목은 포함하지 않는다. |
 | `universe_json` | 해당 순위 계산에 참여한 티커의 정렬된 JSON 배열. 비교 집합을 기록하며 거래소 전체 상장 종목 목록과 다를 수 있다. |
-| `calculation_version` | RS 계산 정의의 버전. 현재 rs-v1-session-window. 거래일 완전성·동률·백분위 규칙의 추적에 사용한다. |
+| `calculation_version` | RS 계산 정의의 버전. rs-v1-session-window는 누락 시 중단하는 기본 정책이며 rs-v2-eligible-session-window는 완전한 이력의 종목만 포함하는 명시적 제외 정책이다. 후자의 순위는 전체 시장 순위가 아니다. |
 | `insert_time` | RS 결과를 저장한 UTC 시각. 같은 기준일을 다시 계산하면 새 저장 시각으로 교체된다. |
 
 ## price_revisions

@@ -22,6 +22,8 @@ def main():
             command.add_argument("--lookback", type=int, default=None if name == "update-all" else 252)
         if name in ("update-all", "update-stock"):
             command.add_argument("--config", help="Settings TOML; defaults to project config/settings.toml")
+        if name == "update-rs":
+            command.add_argument("--missing-policy", choices=["error", "exclude"], default="error")
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
@@ -58,7 +60,7 @@ def main():
         elif args.command == "update-details":
             result = {"detail_rows": update_price_detail(db, args.market)}
         elif args.command == "update-rs":
-            result = update_rs_rating_history(db, args.market, sessions, lookback=args.lookback)
+            result = update_rs_rating_history(db, args.market, sessions, lookback=args.lookback, missing_policy=args.missing_policy)
         elif args.command == "daily":
             from .jobs.daily import run_daily
             result = run_daily(db, args.market, sessions, lookback=args.lookback)
@@ -66,7 +68,7 @@ def main():
             result = update_all(db, args.market, sessions, lookback=args.lookback)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         status = result.get("status", result.get("prices", {}).get("status", "SUCCESS"))
-        if status in ("PARTIAL", "FAILED"):
+        if status in ("PARTIAL", "FAILED", "PARTIAL_UNIVERSE", "INSUFFICIENT_DATA"):
             raise SystemExit(1)
     except (ValueError, OSError, ImportError, sqlite3.Error) as exc:
         parser.exit(1, f"{exc}\n")

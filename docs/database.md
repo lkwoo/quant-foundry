@@ -138,3 +138,16 @@ TEMP stock_stage 적재·건수 확인 → instruments에 신규 키 등록 → 
 현재 사용자 DB의 price_detail/RS가 빈 이유는 가격 수집 PARTIAL/FAILED 이후 계산 생략 정책이다.
 이번 수정은 stock 스냅샷의 완전 교체와 실패 시 보존에 한정한다. 가격 API 심볼 변환,
 거래일 불일치, 부분 성공 시 파생 계산 범위는 별도 개선 항목이다.
+
+## 기존 가격만으로 파생 데이터 생성
+
+price_detail은 update_price_detail(db, market)로 저장된 모든 가격 행을 계산한다.
+RS의 기본 missing_policy="error"는 유지한다. 사용자가 이미 저장된 부분 데이터로 순위를
+생성하려면 update_rs_rating_history(..., missing_policy="exclude")를 명시한다.
+이 모드는 기준일 가격 부재·짧은 이력·거래일 누락을 제외하고 사유를 반환한다.
+계산 버전 rs-v2-eligible-session-window와 실제 universe_json을 저장하여 전체 시장
+순위와 구분한다. 계산 가능한 종목이 없으면 INSUFFICIENT_DATA, 유효 종목이 있으나
+일부 제외되면 PARTIAL_UNIVERSE를 반환한다. 가격을 보간하거나 기간을 줄이지 않는다.
+CLI: update-rs ... --missing-policy exclude. 부분 집합/데이터 부족 결과의 종료 코드는 1이다.
+기준일은 저장된 시장별 최신 price.date를 사용해야 하며 데이터가 오늘까지 갱신된 것으로
+해석하면 안 된다. 원천 수집의 실패 정책이나 update-all의 기본 RS 정책은 바꾸지 않는다.
