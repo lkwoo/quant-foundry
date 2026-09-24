@@ -1,5 +1,6 @@
 """Configuration-driven four-table updates, with independent market reports."""
 import sys
+from dataclasses import replace
 from ..storage.database import Database
 from ..settings import load_settings
 from ..data.calendar import completed_sessions
@@ -7,6 +8,7 @@ from ..data.validation import market_name
 from .daily import run_daily
 from ..providers.market import YahooProvider
 from ..storage.updates import replace_stock_snapshots
+from ..data.downloads import PriceDownloader
 
 
 def refresh_stock(db, markets, provider=None):
@@ -26,8 +28,12 @@ def run_stock_update(*, config=None, database=None, market=None, provider=None):
 
 
 def run_configured_update(*, config=None, database=None, market=None, sessions=None,
-                          lookback=None, provider=None):
+                          lookback=None, provider=None, workers=None, timeout=None, attempts=None):
     settings = load_settings(config)
+    overrides = {name: value for name, value in
+                 (("workers", workers), ("timeout", timeout), ("attempts", attempts)) if value is not None}
+    downloader = PriceDownloader(replace(settings.download, **overrides))
+    provider = provider or YahooProvider(timeout=downloader.options.timeout)
     markets = (market_name(market),) if market else settings.markets
     if sessions is not None and market is None:
         raise ValueError("--sessions requires --market; markets have different holidays")
@@ -54,7 +60,8 @@ def run_configured_update(*, config=None, database=None, market=None, sessions=N
     for name, days in plans.items():
         print(f"[{name}] updating stock, price, price_detail, rs_rating_history through {days[-1]}", file=sys.stderr, flush=True)
         try:
-            result = run_daily(db, name, days, lookback=lookback, provider=provider, refresh_listings=False)
+            result = run_daily(db, name, days, lookback=lookback, provider=provider,
+                               refresh_listings=False, downloader=downloader)
             status = result["prices"]["status"]
             results[name] = {"status": status, **result}
         except Exception as exc:

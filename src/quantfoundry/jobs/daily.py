@@ -4,7 +4,8 @@ from ..data.validation import market_name, session_dates
 from ..data.updater import update_all
 
 
-def run_daily(db, market, sessions, *, lookback=252, provider=None, refresh_listings=True):
+def run_daily(db, market, sessions, *, lookback=252, provider=None, refresh_listings=True,
+              downloader=None):
     """Refresh stock, price, price_detail and RS for one market.
 
     Validate all inputs before any listing/database mutation. sessions are
@@ -23,4 +24,5 @@ def run_daily(db, market, sessions, *, lookback=252, provider=None, refresh_list
         earliest = conn.execute("SELECT MIN(date) FROM price WHERE market=?", (market,)).fetchone()[0]
     if earliest and sessions[0] > earliest:
         raise ValueError("sessions must cover the earliest stored price date")
-    return update_all(db, market, sessions, provider=provider, lookback=lookback, refresh_listings=refresh_listings)
+    return update_all(db, market, sessions, provider=provider, lookback=lookback,
+                      refresh_listings=refresh_listings, downloader=downloader)

@@ -8,7 +8,7 @@
 | 영역 | 구현 범위 |
 | --- | --- |
 | 데이터 수집 | KOSPI·KOSDAQ·NASDAQ·NYSE 종목 목록(FDR), 조정종가·종가·거래량(Yahoo) |
-| 갱신 작업 | 설정 기반 전체 갱신, 단일 시장 갱신, 종목 목록의 원자적 교체, 수집 재시도·실행 결과 기록 |
+| 갱신 작업 | 설정 기반 전체 갱신, 종목 목록의 원자적 교체, 동시 4개 가격 수집, 오류별 재시도·진행 로그 |
 | 저장 | SQLite 스키마 v3, 가격 정정 이력, 정정에 따른 지표 무효화·재계산, 한국어 스키마 설명 |
 | 지표 | SMA·EMA·MACD·Signal·Stage, 거래일 기반 RS와 명시적인 적격 종목군 계산 |
 | 전략 | 전략 인터페이스·등록소, 추세 전략 예제, PASS/FAIL/UNKNOWN 기반 후보 판정 함수 |
@@ -26,7 +26,7 @@ QuantFoundry/
 │   ├── cli.py               # 명령행 인자와 작업 호출
 │   ├── settings.py          # TOML 설정 로딩·검증, DB 경로 해석
 │   ├── stock.py             # 외부에서 사용하는 DB·갱신 API
-│   ├── data/                # 거래일 계산, 입력 검증, 가격 수집·재시도
+│   ├── data/                # 거래일·검증·가격 갱신, downloads.py의 동시 수집·재시도
 │   ├── providers/           # FinanceDataReader·Yahoo 공급자 어댑터
 │   ├── storage/             # SQLite 스키마·트랜잭션·갱신·스키마 설명
 │   ├── indicators/          # 공통 지표 정의와 순수 계산
@@ -53,7 +53,8 @@ QuantFoundry/
 ```text
 CLI → 설정 로딩·DB 초기화 → 시장별 완료 거래일 준비
     → 요청 시장의 종목 목록을 모아 한 번에 교체
-    → 시장별 가격 수집·검증·저장 → 지표 재계산 → RS 계산 → 결과 출력
+    → 시장별 가격 병렬 수집 → 완료 순서대로 검증·DB 순차 저장
+    → 지표 재계산 → RS 계산 → 결과 출력
 ```
 
 가격 수집이 부분 실패하면 해당 시장의 지표·RS 갱신을 건너뛴다.
@@ -79,9 +80,10 @@ quantfoundry strategies
 python -m unittest discover -s tests -v
 ```
 
-기본 설치만으로 SQLite·전략 테스트를 실행할 수 있다. 실제 시세 수집과 거래소 캘린더
-테스트에는 `python -m pip install -e ".[market-data]"`가 필요하다.
-해당 의존성이 없으면 캘린더 테스트는 건너뛴다.
+기본 설치만으로 SQLite·전략·동시 수집 테스트를 실행할 수 있다. 실제 시세 수집과
+캘린더·yfinance 호환성 테스트에는 `python -m pip install -e ".[market-data]"`가 필요하다.
+해당 의존성이 없으면 캘린더·yfinance 호환성 테스트는 건너뛴다.
+호환성 테스트도 실제 Yahoo 호출 없이 HTTP 모의 응답을 사용한다.
 
 ## Windows PowerShell 실행
 
@@ -135,6 +137,47 @@ quantfoundry update-all --market NASDAQ --sessions config/sessions/nasdaq.json
 종목 목록 교체를 마친 뒤에는 시장 하나의 갱신이 실패해도 다음 시장을 처리하고 결과를 함께 출력한다.
 모든 시장 성공이면 종료 코드 0, 실패/부분 실패가 있으면 1이다.
 기존 QuantTrading DB는 자동 이관하거나 변경하지 않는다.
+
+## 병렬 수집과 실패 처리
+
+`update-all`은 시장을 순서대로 처리하며, 한 시장 안에서 기본 **4개 종목**을 동시에
+다운로드한다. 느린 종목이 있어도 완료된 종목부터 검증·저장하고 빈 작업 자리에 다음
+종목을 배정한다. SQLite 저장은 호출 스레드 하나에서 종목별 트랜잭션으로 수행한다.
+
+```powershell
+quantfoundry update-all                           # 동시 4개
+quantfoundry update-all --workers 2               # 동시 수집 수 축소
+quantfoundry update-all --workers 4 --timeout 8 --attempts 2
+```
+
+`config/settings.toml`의 `[update]`에서 기본값을 조정한다. CLI 옵션은 설정값을 덮어쓴다.
+
+| 설정 | 기본값 | 의미 |
+| --- | --- | --- |
+| `workers` | `4` | 최대 동시 종목 수. `1`이면 순차 수집 |
+| `timeout` | `10` | Yahoo 가격 요청 대기 시간(초) |
+| `attempts` | `2` | 재시도 가능한 오류의 총 시도 횟수(최초 1회 포함) |
+| `retry_delay` | `2` | 재시도 대기 시작값(초), 추가 재시도마다 2배 |
+| `rate_limit_delay` | `30` | 요청 제한 감지 시 새 다운로드를 중단하는 시간(초) |
+
+- 데이터·시간대 없음 또는 빈/잘못된 응답: 이번 실행에서 재시도하지 않고 실패 사유를 기록한다.
+  상장폐지로 확정하거나 종목·기존 가격을 삭제하지 않는다.
+- 타임아웃·연결 오류·HTTP 5xx: 기본 1회 재시도한다. 대기 중인 재시도는 작업 스레드를 점유하지 않는다.
+- 요청 제한: 실행 중인 요청은 마치되 새 요청은 기본 30초 쉬고, 동시 수를 최대 2개로 낮춘다.
+  같은 `update-all` 실행의 다음 시장에도 대기 시각과 낮춘 동시 수를 유지한다.
+- 가격 품질·DB 오류: 재다운로드하지 않고 실패 처리한다.
+
+로그는 stderr에 완료 수·종목·성공/실패·시도 횟수·소요 시간을 출력하며 최종 JSON은 stdout에 출력한다.
+`daily`와 `update-prices`도 `--workers`, `--timeout`, `--attempts`를 지원한다.
+이 두 명령은 TOML을 읽지 않고 위 기본값과 CLI 옵션을 사용한다.
+
+Yahoo 어댑터는 오류 종류를 보존하기 위해 `Ticker.history()`를 사용하며 yfinance 1.7 계열을 지원한다.
+`timeout`은 내부 시간대·인증 조회까지 포함한 종목 전체의 강제 종료 시간이 아니다.
+사용자 공급자를 Python API로 주입하면 공급자의 `fetch_prices()`가 동시 호출을 지원해야 하며,
+네트워크 타임아웃은 해당 공급자에서 설정한다. 기존 공급자가 순차 호출을 요구하면 `workers=1`을 사용한다.
+
+가격 수집 실패는 `PARTIAL`/`FAILED`로 남으며, 해당 시장의 지표·RS 계산을 생략하는 정책은 유지한다.
+병렬화는 전체 보관 기간 재조회와 가격 정정 검증을 유지한다.
 
 ## 명시적인 daily 실행
 

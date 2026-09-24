@@ -66,7 +66,7 @@ quality_issues, screening_runs/screening_results를 단계적으로 만든다.
 ## Raspberry Pi
 
 Python 3.11+ 지원 64-bit OS/장비를 우선 대상으로 삼되 실제 ARM 의존성 설치를 검증한다.
-로컬 SSD, 낮은 수집 동시성, 단일 DB writer, 짧은 트랜잭션을 기본으로 한다.
+로컬 SSD, 낮은 수집 동시성(현재 기본 4개, `workers`로 조정), 단일 DB writer, 짧은 트랜잭션을 기본으로 한다.
 WAL/busy_timeout/foreign_keys를 연결 정책으로 검토하고 장애 내구성 설정을 명시한다.
 DB는 동기화 폴더 밖에 두고 일관된 SQLite backup API 결과만 외부로 복사한다.
 systemd timer, 중복 실행 잠금, 실행 체크포인트, 백업 복원 검증을 운영 단계에 추가한다.

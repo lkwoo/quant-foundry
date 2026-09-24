@@ -1,8 +1,9 @@
 """Validated defaults for the zero-argument update-all command."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import tomllib
 from .data.validation import market_name, iso_date
+from .data.downloads import DownloadOptions
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,7 @@ class Settings:
     markets: tuple[str, ...]
     start: str
     lookback: int
+    download: DownloadOptions = field(default_factory=DownloadOptions)
 
 
 def load_settings(path=None):
@@ -36,4 +38,7 @@ def load_settings(path=None):
     lookback = update.get("lookback", 252)
     if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback < 1:
         raise ValueError("update.lookback must be a positive integer")
-    return Settings(db.resolve(), markets, start, lookback)
+    download = DownloadOptions(**{name: update[name] for name in
+                                 ("workers", "timeout", "attempts", "retry_delay", "rate_limit_delay")
+                                 if name in update})
+    return Settings(db.resolve(), markets, start, lookback, download)

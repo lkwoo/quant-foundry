@@ -2,10 +2,14 @@
 from datetime import date, timedelta
 from ..data.validation import market_name
 from ..storage.updates import PriceBar
+from .errors import DataUnavailableError, RateLimitError, TransientDownloadError
 
 
 class YahooProvider:
     source = "yahoo-adj-close-auto_adjust_false-v1"
+
+    def __init__(self, *, timeout=10):
+        self.timeout = timeout
 
     def list_tickers(self, market):
         import FinanceDataReader as fdr
@@ -17,13 +21,33 @@ class YahooProvider:
 
     def fetch_prices(self, ticker, start, end):
         import yfinance as yf
+        from yfinance.exceptions import YFPricesMissingError, YFTzMissingError, YFRateLimitError
+        from curl_cffi.requests.exceptions import ConnectionError as CurlConnectionError, Timeout, HTTPError
         # Public API uses inclusive dates; Yahoo end is exclusive.
         exclusive_end = (date.fromisoformat(end) + timedelta(days=1)).isoformat()
-        frame = yf.download(ticker, start=start, end=exclusive_end, auto_adjust=False,
-                            threads=False, progress=False, timeout=20, multi_level_index=False)
+        # download() hides exceptions in empty frames. history() preserves error
+        # types, with no nested worker pool or changes to yfinance global config.
+        # Per-call raise_errors is deprecated but supported in pinned yfinance 1.7;
+        # retain it rather than mutating global exception policy in worker threads.
+        try:
+            frame = yf.Ticker(ticker).history(start=start, end=exclusive_end, auto_adjust=False,
+                                             actions=False, timeout=self.timeout, raise_errors=True)
+        except (YFPricesMissingError, YFTzMissingError) as exc:
+            raise DataUnavailableError(str(exc)) from exc
+        except YFRateLimitError as exc:
+            raise RateLimitError(str(exc)) from exc
+        except (CurlConnectionError, Timeout) as exc:
+            raise TransientDownloadError(str(exc)) from exc
+        except HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            if status == 429:
+                raise RateLimitError(str(exc)) from exc
+            if status is not None and 500 <= status < 600:
+                raise TransientDownloadError(str(exc)) from exc
+            raise
         required = ("Close", "Adj Close", "Volume")
         if frame is None or frame.empty or any(c not in frame.columns for c in required):
-            raise ValueError(f"Empty or malformed price response: {ticker}")
+            raise DataUnavailableError(f"Empty or malformed price response: {ticker}")
         return [PriceBar(ticker, index.date().isoformat(), row["Adj Close"],
                          None if row["Volume"] != row["Volume"] else row["Volume"], row["Close"])
                 for index, row in frame.iterrows()]

@@ -32,7 +32,7 @@ update_price_detail(db, "NASDAQ")
 | update_price(db, market, bars, source=...) | 전달한 가격의 원자적 upsert. 동일 값은 생략, 정정은 이력 기록 |
 | update_price_detail(db, market, tickers=None) | SMA/EMA/MACD/Signal/Stage 계산·저장. 변경 없는 종목은 생략 |
 | update_rs_rating_history(db, market, sessions, lookback=252) | 마지막 거래일의 동일 시장 RS 갱신. 제외된 짧은 이력 종목 반환 |
-| update_market_prices(db, market, sessions, provider=None) | 등록 종목을 Yahoo에서 순차 수집하여 price 갱신. 실패 종목·실행 ID 반환 |
+| update_market_prices(db, market, sessions, provider=None, workers=4, timeout=10, attempts=2) | 등록 종목의 가격을 병렬 수집하고 순차 저장. 실패 종목·실행 ID 반환 |
 | update_all(db, market, sessions, provider=None, lookback=252) | FDR 목록→가격→지표→RS. 가격 부분 실패 시 파생 갱신 생략 |
 
 ## 실 API 호출
@@ -99,9 +99,11 @@ RS: 실제 거래일 window 내 모든 가격이 있는 종목만 수익률을 �
 update_runs의 상태는 가격 수집 단계의 상태다. 지표/RS의 후속 실패는 예외로 전달된다.
 전체 시장 작업 하나가 단일 트랜잭션인 것은 아니다. 파생 지표도 종목 단위로 커밋한다.
 
-종목별 순차 수집과 유한 재시도(기본 3회)를 사용한다. full-history 다운로드의
-네트워크 비용이 크므로 라즈베리파이 전체 시장 소요시간을 실측한 뒤 정정 탐지 기반
-증분 수집으로 확장한다. API 호출 중 DB 트랜잭션을 열어 두지 않는다.
+종목별 병렬 수집(기본 4개)과 단일 DB writer를 사용한다. 일시적 통신 오류만 기본 총 2회
+시도하고, 데이터·시간대 없음은 즉시 실패로 기록한다. 요청 제한이면 신규 요청을 기본 30초
+중단하고 동시 수를 최대 2개로 낮춘다. 설정과 진행 로그는 [README](../README.md#병렬-수집과-실패-처리)를 참고한다.
+full-history 다운로드의 네트워크 비용은 여전히 크므로 실제 처리량을 측정한 뒤
+정정 탐지 기반 증분 수집으로 확장한다. API 호출을 기다리는 동안 DB 트랜잭션을 열어 두지 않는다.
 한 DB에는 하나의 갱신 파이프라인만 실행한다. 프로세스 간 전체 작업 잠금과
 강제 종료된 RUNNING 실행의 자동 복구는 아직 미구현이다. 재실행은 가격 중복에 안전하다.
 실제 공급자 API/ARM 장비 검증과 기존 DB 이관은 이번 변경에 포함되지 않았다.
