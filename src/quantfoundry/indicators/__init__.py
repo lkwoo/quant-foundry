@@ -1,1 +1,1 @@
-"""Pure indicator calculations; implementation planned."""
+"""Pure daily indicator calculations and shared feature definitions."""

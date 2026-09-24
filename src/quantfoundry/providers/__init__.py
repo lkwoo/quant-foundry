@@ -1,1 +1,1 @@
-"""External data source adapters; implementation planned."""
+"""Optional FinanceDataReader listings and Yahoo price adapters."""

@@ -1,1 +1,1 @@
-"""SQLite repositories and explicit migrations; implementation planned."""
+"""Versioned SQLite storage, transactional updates and schema descriptions."""

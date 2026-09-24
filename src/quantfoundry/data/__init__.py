@@ -1,1 +1,1 @@
-"""Update planning, calendars and quality validation; implementation planned."""
+"""Exchange calendars, input validation and market data updates."""

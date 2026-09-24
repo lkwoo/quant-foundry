@@ -3,6 +3,70 @@
 주식 데이터를 지속적으로 갱신하고, 재현 가능한 조건 평가로 매매 후보를 선정하는 프로젝트.
 기존 QuantTrading 코드와 DB는 수정하거나 복사하지 않는다.
 
+## 현재 구현 상태
+
+| 영역 | 구현 범위 |
+| --- | --- |
+| 데이터 수집 | KOSPI·KOSDAQ·NASDAQ·NYSE 종목 목록(FDR), 조정종가·종가·거래량(Yahoo) |
+| 갱신 작업 | 설정 기반 전체 갱신, 단일 시장 갱신, 종목 목록의 원자적 교체, 수집 재시도·실행 결과 기록 |
+| 저장 | SQLite 스키마 v3, 가격 정정 이력, 정정에 따른 지표 무효화·재계산, 한국어 스키마 설명 |
+| 지표 | SMA·EMA·MACD·Signal·Stage, 거래일 기반 RS와 명시적인 적격 종목군 계산 |
+| 전략 | 전략 인터페이스·등록소, 추세 전략 예제, PASS/FAIL/UNKNOWN 기반 후보 판정 함수 |
+| 검증 | 임시 DB와 공급자 대역을 사용하는 오프라인 테스트, 선택적 거래소 캘린더 테스트 |
+
+일일 작업과 전략 평가의 연결, 후보 결과 저장, 기존 DB 이관, 백테스트,
+스케줄 실행은 아직 구현하지 않았다. 예제 전략은 수익성 검증을 거친 투자 전략이 아니다.
+
+## 프로젝트 구조
+
+```text
+QuantFoundry/
+├── src/quantfoundry/         # Python 패키지
+│   ├── __main__.py          # python -m quantfoundry 진입점
+│   ├── cli.py               # 명령행 인자와 작업 호출
+│   ├── settings.py          # TOML 설정 로딩·검증, DB 경로 해석
+│   ├── stock.py             # 외부에서 사용하는 DB·갱신 API
+│   ├── data/                # 거래일 계산, 입력 검증, 가격 수집·재시도
+│   ├── providers/           # FinanceDataReader·Yahoo 공급자 어댑터
+│   ├── storage/             # SQLite 스키마·트랜잭션·갱신·스키마 설명
+│   ├── indicators/          # 공통 지표 정의와 순수 계산
+│   ├── jobs/                # 단일 시장 daily, 설정 기반 update-all·update-stock
+│   ├── domain/              # Snapshot, RuleResult, Verdict 데이터 모델
+│   ├── strategies/          # 전략 규약·등록소·추세 전략 예제
+│   └── screening/           # 전략 평가 결과의 후보 여부 판정
+├── config/
+│   ├── settings.toml        # 갱신 시장·보관 시작일·RS 기간·DB 경로
+│   └── strategies/trend.toml # 향후 전략 설정 예시; 현재 로더에서 읽지 않음
+├── tests/                   # DB·수집·지표·전략·CLI·캘린더 테스트
+├── docs/                    # 설계와 DB 상세 문서
+├── pyproject.toml           # 패키지 메타데이터, 선택적 의존성, CLI 등록
+├── AGENTS.md                # 저장소 작업·검증·커밋 규칙
+└── var/                     # 실행 시 생성되는 로컬 DB 등; Git 제외
+```
+
+`stock.py`는 공개 API를 모으는 진입점이며 실제 저장·갱신 구현은
+`storage/`와 `data/`에 있다. `domain/`·`indicators/`·`strategies/`는
+수집 및 DB 접근과 분리되어 있다.
+
+`update-all`의 실행 흐름:
+
+```text
+CLI → 설정 로딩·DB 초기화 → 시장별 완료 거래일 준비
+    → 요청 시장의 종목 목록을 모아 한 번에 교체
+    → 시장별 가격 수집·검증·저장 → 지표 재계산 → RS 계산 → 결과 출력
+```
+
+가격 수집이 부분 실패하면 해당 시장의 지표·RS 갱신을 건너뛴다.
+종목 목록 교체 후 시장별 갱신 중 발생한 실패는 기록하고 다음 시장을 처리한다.
+거래일 준비나 종목 목록 수집·교체 단계의 실패는 전체 작업을 중단한다.
+
+| 문서 | 내용 |
+| --- | --- |
+| [아키텍처](docs/architecture.md) | 모듈 책임, 전략 확장 원칙, 향후 설계 |
+| [DB 사용법](docs/database.md) | Python API·CLI, 데이터 정의, 실행 한계 |
+| [스키마 설명](docs/schema-comments.md) | 테이블·컬럼별 한국어 설명 |
+| [기존 DB 대응](docs/legacy-schema.md) | 기존 스키마와의 대응 및 이관 시 고려 사항 |
+
 ## 시작
 
 Python 3.11 이상. 프로젝트 루트에서:
@@ -15,16 +79,9 @@ quantfoundry strategies
 python -m unittest discover -s tests -v
 ```
 
-현재 구현: 패키지 골격, 전략 인터페이스·예제, 네 핵심 SQLite 테이블의 생성·갱신,
-가격 정정 이력·지표 무효화/재계산, 거래일 기반 RS, 선택적 FDR/Yahoo adapter,
-CLI 및 오프라인 통합 테스트. 예제 전략은 수익성 검증을 거친 투자 전략이 아니다.
-
-DB 사용법과 실행 한계는 [database](docs/database.md)를 참고한다.
-아직 미구현: 기존 DB 이관, 후보 결과 저장,
-백테스트, 스케줄 실행. config/settings.toml은 update-all이 사용하며 전략 설정 파일은 아직 예시다.
-
-설계는 [architecture](docs/architecture.md), 기존 DB 대응은
-[legacy-schema](docs/legacy-schema.md)를 참고한다.
+기본 설치만으로 SQLite·전략 테스트를 실행할 수 있다. 실제 시세 수집과 거래소 캘린더
+테스트에는 `python -m pip install -e ".[market-data]"`가 필요하다.
+해당 의존성이 없으면 캘린더 테스트는 건너뛴다.
 
 ## Windows PowerShell 실행
 
@@ -32,7 +89,7 @@ DB 사용법과 실행 한계는 [database](docs/database.md)를 참고한다.
 프로젝트 루트에서 패키지를 editable 모드로 설치한다.
 
 ```powershell
-cd "C:\Users\dlrms\OneDrive\바탕 화면\lkw\git\QuantFoundry"
+# QuantFoundry 프로젝트 루트에서 실행
 # .venv가 없는 경우에만: python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[market-data]"
 .\.venv\Scripts\quantfoundry.exe --help
@@ -75,7 +132,7 @@ quantfoundry update-all --db D:/QuantData/quantfoundry.sqlite3
 quantfoundry update-all --market NASDAQ --sessions config/sessions/nasdaq.json
 ```
 
-시장 하나가 실패해도 다음 시장을 처리하고 결과를 함께 출력한다.
+종목 목록 교체를 마친 뒤에는 시장 하나의 갱신이 실패해도 다음 시장을 처리하고 결과를 함께 출력한다.
 모든 시장 성공이면 종료 코드 0, 실패/부분 실패가 있으면 1이다.
 기존 QuantTrading DB는 자동 이관하거나 변경하지 않는다.
 

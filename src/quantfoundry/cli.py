@@ -17,7 +17,7 @@ def main():
         if name != "init-db":
             command.add_argument("--market", required=name not in ("update-all", "update-stock"))
         if name in ("update-prices", "update-rs", "update-all", "daily"):
-            command.add_argument("--sessions", required=name not in ("update-all", "update-stock"), help="JSON list of completed exchange session dates")
+            command.add_argument("--sessions", required=name != "update-all", help="JSON list of completed exchange session dates")
         if name in ("update-rs", "update-all", "daily"):
             command.add_argument("--lookback", type=int, default=None if name == "update-all" else 252)
         if name in ("update-all", "update-stock"):
@@ -32,8 +32,7 @@ def main():
         for name, strategy in STRATEGIES.items():
             print(f"{name} v{strategy.version}")
         return
-    from .stock import Database, update_stock, update_price_detail, update_rs_rating_history, update_market_prices, update_all
-    from .providers.market import YahooProvider
+    from .stock import Database, update_price_detail, update_rs_rating_history, update_market_prices
     try:
         sessions = json.loads(Path(args.sessions).read_text(encoding="utf-8")) if getattr(args, "sessions", None) else None
         if args.command == "update-stock":
@@ -53,8 +52,6 @@ def main():
         if args.command == "init-db":
             db.initialize()
             result = {"initialized": str(db.path)}
-        elif args.command == "update-stock":
-            result = {"stocks": update_stock(db, args.market, YahooProvider().list_tickers(args.market))}
         elif args.command == "update-prices":
             result = asdict(update_market_prices(db, args.market, sessions))
         elif args.command == "update-details":
@@ -64,8 +61,6 @@ def main():
         elif args.command == "daily":
             from .jobs.daily import run_daily
             result = run_daily(db, args.market, sessions, lookback=args.lookback)
-        else:
-            result = update_all(db, args.market, sessions, lookback=args.lookback)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         status = result.get("status", result.get("prices", {}).get("status", "SUCCESS"))
         if status in ("PARTIAL", "FAILED", "PARTIAL_UNIVERSE", "INSUFFICIENT_DATA"):

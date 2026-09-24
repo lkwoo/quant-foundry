@@ -1,1 +1,1 @@
-"""Scheduled orchestration and resumable runs; implementation planned."""
+"""Daily and configuration-driven market update orchestration."""
