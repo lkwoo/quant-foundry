@@ -11,10 +11,28 @@ from quantfoundry.indicators.daily import VERSION
 from quantfoundry.jobs.ma import query_ma
 from quantfoundry.storage.database import Database
 from quantfoundry.storage.updates import PriceBar, update_price, update_stock
-from quantfoundry.strategies.ma import classify, rank_returns
+from quantfoundry.strategies.ma import classify, rank_returns, stage1_quality
 
 
 class MARulesTests(unittest.TestCase):
+    def test_stage1_trade_quality_boundaries(self):
+        rows = [dict(volume=100, close=100+i, adj_close=100+i) for i in range(20)]
+        self.assertIsNone(stage1_quality(rows))
+        for row in rows[-4:]:
+            row['volume'] = 0
+        self.assertIsNone(stage1_quality(rows))  # 16/20 is accepted.
+        rows[-5]['volume'] = None
+        self.assertIn('16일 미만', stage1_quality(rows))
+        rows[0]['volume'] = 0
+        self.assertEqual(stage1_quality(rows), '최신 거래량 0')
+        rows[0]['volume'] = None
+        self.assertEqual(stage1_quality(rows), '최신 거래량 확인 불가')
+        rows = [dict(volume=100, close=100, adj_close=100+i) for i in range(20)]
+        self.assertEqual(stage1_quality(rows), '최근 20개 관측일 가격 동일')
+        rows[0]['close'] = 300  # A large move with actual trades is not banned.
+        self.assertIsNone(stage1_quality(rows))
+        self.assertIn('부족', stage1_quality(rows[:19]))
+
     def test_six_permutations_and_tie_boundary(self):
         permutations = [(3, 2, 1), (2, 3, 1), (1, 3, 2), (1, 2, 3), (2, 1, 3), (3, 1, 2)]
         for number, values in enumerate(permutations, 1):
@@ -54,6 +72,8 @@ class MAQueryTests(unittest.TestCase):
         selected = list(dict.fromkeys([days[0], *days[-40:]]))
         update_price(self.db, market, [PriceBar(ticker, day, 100 if day != days[-1] else 100*(1+gain))
                                       for day in selected], source='fixture')
+        with self.db.transaction() as conn:
+            conn.execute('UPDATE price SET volume=1000 WHERE market=? AND ticker=?', (market, ticker))
         values = {1: (110, 105, 100), 4: (100, 105, 110), 6: (110, 100, 105)}[number]
         with self.db.transaction() as conn:
             conn.execute('''INSERT INTO price_detail(ticker,market,date,adj_close,stage,ema_5,ema_20,ema_40,calculation_version)
@@ -66,7 +86,7 @@ class MAQueryTests(unittest.TestCase):
         tickers = [f'A{i:02}' for i in range(12)] + [f'B{i:02}' for i in range(12)] + ['STRONGEST']
         update_stock(self.db, 'NYSE', tickers)
         for i, ticker in enumerate(tickers):
-            self.seed(ticker, number=1 if ticker.startswith('A') else 6 if ticker.startswith('B') else 4, gain=i/10)
+            self.seed(ticker, number=1 if ticker.startswith('A') else 6 if ticker.startswith('B') else 4, gain=(i+1)/10)
         before = self.db.path.read_bytes()
         output, ok = self.query('nyse')
         self.assertTrue(ok)
@@ -106,6 +126,23 @@ class MAQueryTests(unittest.TestCase):
         output, ok = self.query('NYSE')
         self.assertFalse(ok)
         self.assertIn('최신일 price_detail 없음 2개', output)
+
+    def test_zero_volume_jump_excluded_only_from_stage1_candidates(self):
+        update_stock(self.db, 'NYSE', ['NORMAL', 'JUMP', 'SIX'])
+        self.seed('NORMAL')
+        self.seed('JUMP', gain=26.17)
+        self.seed('SIX', number=6)
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE price SET volume=0 WHERE ticker IN ('JUMP','SIX')")
+        output, ok = self.query('NYSE')
+        self.assertTrue(ok)
+        rows = [line.split()[1] for line in output.splitlines() if line.split() and line.split()[0].isdigit()]
+        self.assertEqual(rows, ['NORMAL', 'SIX'])
+        self.assertIn('Stage 1: 최신 거래량 0 1개', output)
+        individual, ok = self.query('JUMP')
+        self.assertTrue(ok)
+        self.assertIn('현재 Stage: 1', individual)
+        self.assertIn('제외 — 최신 거래량 0', individual)
 
     def test_stale_ticker_displays_own_date_and_no_old_detail_fallback(self):
         self.seed('OLD', days=self.days[:-1])

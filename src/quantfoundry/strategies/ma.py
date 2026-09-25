@@ -3,6 +3,28 @@ from math import isfinite
 from ..indicators.daily import stage, VERSION
 
 PERIODS = (5, 20, 40)
+
+
+def stage1_quality(prices):
+    """Candidate policy, not a delisting diagnosis. Newest observations first."""
+    recent = prices[:20]
+    if len(recent) < 20:
+        return '최근 거래 관측값 부족(20개 필요)'
+    volume = recent[0]['volume']
+    if volume is None or not isfinite(volume) or volume < 0:
+        return '최신 거래량 확인 불가'
+    if volume == 0:
+        return '최신 거래량 0'
+    active = sum(p['volume'] is not None and isfinite(p['volume']) and p['volume'] > 0 for p in recent)
+    if active < 16:
+        return '최근 20개 관측일 중 거래량 양수 16일 미만'
+    # Prefer unadjusted close so dividend adjustments do not disguise flat quotes.
+    closes = [p['close'] if p['close'] is not None else p['adj_close'] for p in recent]
+    if len(set(closes)) == 1:
+        return '최근 20개 관측일 가격 동일'
+    return None
+
+
 ORDERS = {1: "EMA5 ≥ EMA20 ≥ EMA40", 2: "EMA20 ≥ EMA5 ≥ EMA40",
           3: "EMA20 ≥ EMA40 ≥ EMA5", 4: "EMA40 ≥ EMA20 ≥ EMA5",
           5: "EMA40 ≥ EMA5 ≥ EMA20", 6: "EMA5 ≥ EMA40 ≥ EMA20"}

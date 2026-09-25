@@ -6,7 +6,7 @@ from ..data.calendar import CALENDARS
 from ..data.validation import MARKETS
 from ..settings import load_settings
 from ..storage.database import Database
-from ..strategies.ma import classify, rank_returns, ORDERS, LABELS, PERIODS
+from ..strategies.ma import classify, rank_returns, stage1_quality, ORDERS, LABELS, PERIODS
 
 
 def rs_sessions(market, as_of):
@@ -46,7 +46,7 @@ def snapshot(conn, market, ticker, as_of):
                           (market, ticker, as_of)).fetchone()
     # LIMIT bounds warmup checks; no per-symbol scan of the whole price history.
     prices = conn.execute(
-        'SELECT date,adj_close FROM price WHERE ticker=? AND market=? AND date<=? ORDER BY date DESC LIMIT 40',
+        'SELECT date,adj_close,close,volume FROM price WHERE ticker=? AND market=? AND date<=? ORDER BY date DESC LIMIT 40',
         (ticker, market, as_of)).fetchall()
     days = [r['date'] for r in prices]
     if not days or days[0] != as_of:
@@ -60,6 +60,7 @@ def snapshot(conn, market, ticker, as_of):
     result, reason = classify(detail, len(days), previous)
     if result is not None:
         result['previous_date'] = days[1] if len(days) > 1 else None
+        result['quality_exclusion'] = stage1_quality(prices) if result['stage'] == 1 else None
     return result, reason
 
 
@@ -81,6 +82,9 @@ def query_ticker(conn, market, ticker):
               ', '.join(f'EMA{n}={v:.6f}' for n, v in zip(PERIODS, result['emas']))]
     if result['boundary']:
         lines.append('동률 경계: 기존 DB 규칙에 따라 먼저 일치하는 Stage를 표시합니다.')
+    if number == 1:
+        lines.append('Stage 1 Top 10 거래 필터: ' +
+                     (f"제외 — {result['quality_exclusion']}" if result['quality_exclusion'] else '통과'))
     if result['directions']:
         lines.append(f"이전 관측일 {result['previous_date']} 대비 EMA5/20/40: " + '/'.join(result['directions']))
     else:
@@ -136,13 +140,17 @@ def query_market(conn, market, *, sessions=None):
         if result['boundary']:
             excluded['EMA 동률 경계'] += 1
             continue
+        if result['quality_exclusion']:
+            excluded['Stage 1: ' + result['quality_exclusion']] += 1
+            continue
         groups[result['stage']].append((ticker, result))
     lines += [f'RS 기간: {start} → {latest} (252거래일)',
               f'RS 비교 대상: {len(scores)}/{len(tickers)}개 현재 상장 종목',
               '정렬: 자체 RS 내림차순 → 252거래일 수익률 내림차순 → 종목코드 오름차순',
               '자체 RS는 시장 내 수익률 백분위(0~99)이며 IBD 공식 RS Rating이 아닙니다.',
               'RS는 양 끝 날짜의 가격으로 계산합니다. 중간 누락을 보간하거나 과거 RS를 섞지 않습니다.',
-              'EMA는 저장 관측값 기준이며 최소 40개가 필요합니다. 동률 경계는 Top 10에서 제외합니다.']
+              'EMA는 저장 관측값 기준이며 최소 40개가 필요합니다. 동률 경계는 Top 10에서 제외합니다.',
+              'Stage 1 거래 필터: 최신 거래량 > 0, 최근 20개 관측일 중 양수 거래량 ≥ 16일, 20일 동일 가격 제외']
     for number, entries in groups.items():
         entries.sort(key=lambda entry: (-scores[entry[0]], -returns[entry[0]], entry[0]))
         lines += [f'\nStage {number} Top 10 — {LABELS[number]} / {ORDERS[number]}',
