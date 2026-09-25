@@ -55,9 +55,9 @@ class Database:
             conn.execute("PRAGMA journal_mode=WAL")
 
     @contextmanager
-    def connection(self, require_schema=True):
+    def connection(self, require_schema=True, *, readonly=False):
         # mode=rw prevents typos from silently creating an empty DB during updates.
-        uri = self.path.as_uri() + ("?mode=rw" if require_schema else "?mode=rwc")
+        uri = self.path.as_uri() + ("?mode=ro" if readonly else "?mode=rw" if require_schema else "?mode=rwc")
         conn = sqlite3.connect(uri, uri=True, timeout=30)
         conn.row_factory = sqlite3.Row
         try:

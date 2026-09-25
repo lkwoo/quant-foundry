@@ -1,7 +1,7 @@
 from datetime import date
 from math import isfinite
 
-MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE")
+MARKETS = ("KOSPI", "KOSDAQ", "NASDAQ", "NYSE", "NYSEARCA")
 
 
 def market_name(value):

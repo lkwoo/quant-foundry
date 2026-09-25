@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from .validation import market_name, iso_date
 
-CALENDARS = {"KOSPI": "XKRX", "KOSDAQ": "XKRX", "NASDAQ": "NASDAQ", "NYSE": "XNYS"}
+CALENDARS = {"KOSPI": "XKRX", "KOSDAQ": "XKRX", "NASDAQ": "NASDAQ", "NYSE": "XNYS", "NYSEARCA": "XNYS"}
 
 
 def completed_sessions(market, start, *, now=None, host_today=None, delay_hours=2):

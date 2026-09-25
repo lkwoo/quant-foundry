@@ -9,7 +9,13 @@ from .strategies.registry import STRATEGIES
 
 def main():
     parser = argparse.ArgumentParser(description="QuantFoundry")
+    parser.add_argument("-q", "--query", choices=["haa"], help="Read-only portfolio decision")
+    parser.add_argument("--db", dest="query_db", help="Database for -q")
+    parser.add_argument("--config", dest="query_config", help="Settings TOML for -q")
     sub = parser.add_subparsers(dest="command")
+    haa_update = sub.add_parser("update-haa", help="Refresh the ten HAA ETFs")
+    haa_update.add_argument("--db")
+    haa_update.add_argument("--config")
     sub.add_parser("strategies")
     for name in ("init-db", "update-stock", "update-prices", "update-details", "update-rs", "update-all", "daily"):
         command = sub.add_parser(name)
@@ -29,15 +35,37 @@ def main():
         if name == "update-rs":
             command.add_argument("--missing-policy", choices=["error", "exclude"], default="error")
     args = parser.parse_args()
+    if args.query:
+        if args.command:
+            parser.error("-q cannot be combined with a subcommand")
+        from .jobs.haa import query_haa
+        try:
+            output, success = query_haa(config=args.query_config, database=args.query_db)
+            print(output)
+            if not success:
+                raise SystemExit(1)
+        except (ValueError, OSError, ImportError, sqlite3.Error) as exc:
+            parser.exit(1, f"{exc}\n")
+        return
+    if args.query_db or args.query_config:
+        parser.error("Root --db/--config require -q; use subcommand options after the command")
     if args.command is None:
         parser.print_help()
         return
     if args.command == "strategies":
+        print("haa HAA-Balanced (quantfoundry -q haa)")
         for name, strategy in STRATEGIES.items():
             print(f"{name} v{strategy.version}")
         return
     from .stock import Database, update_price_detail, update_rs_rating_history, update_market_prices
     try:
+        if args.command == "update-haa":
+            from .jobs.haa import update_haa
+            result = update_haa(config=args.config, database=args.db)
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+            if result["status"] != "SUCCESS":
+                raise SystemExit(1)
+            return
         sessions = json.loads(Path(args.sessions).read_text(encoding="utf-8")) if getattr(args, "sessions", None) else None
         if args.command == "update-stock":
             from .jobs.update_all import run_stock_update

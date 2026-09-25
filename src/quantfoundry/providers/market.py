@@ -13,6 +13,8 @@ class YahooProvider:
         self.timeout = timeout
 
     def list_tickers(self, market):
+        if market_name(market) == "NYSEARCA":
+            raise ValueError("NYSEARCA full listings are unsupported; use update-haa for the fixed ETF universe")
         import FinanceDataReader as fdr
         market = market_name(market)
         column, suffix = ("Code", ".KS") if market == "KOSPI" else (("Code", ".KQ") if market == "KOSDAQ" else ("Symbol", ""))

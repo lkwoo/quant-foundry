@@ -11,7 +11,7 @@
 | 갱신 작업 | 설정 기반 전체 갱신, 종목 목록의 원자적 교체, 동시 4개 가격 수집, 오류별 재시도·진행 로그 |
 | 저장 | SQLite 스키마 v3, 가격 정정 이력, 정정에 따른 지표 무효화·재계산, 한국어 스키마 설명 |
 | 지표 | SMA·EMA·MACD·Signal·Stage, 거래일 기반 RS와 명시적인 적격 종목군 계산 |
-| 전략 | 전략 인터페이스·등록소, 추세 전략 예제, PASS/FAIL/UNKNOWN 기반 후보 판정 함수 |
+| 전략 | HAA-Balanced 목표 비중·판단 근거 조회, 추세 전략 예제, PASS/FAIL/UNKNOWN 기반 후보 판정 함수 |
 | 검증 | 임시 DB와 공급자 대역을 사용하는 오프라인 테스트, 선택적 거래소 캘린더 테스트 |
 
 일일 작업과 전략 평가의 연결, 후보 결과 저장, 기존 DB 이관, 백테스트,
@@ -30,9 +30,9 @@ QuantFoundry/
 │   ├── providers/           # FinanceDataReader·Yahoo 공급자 어댑터
 │   ├── storage/             # SQLite 스키마·트랜잭션·갱신·스키마 설명
 │   ├── indicators/          # 공통 지표 정의와 순수 계산
-│   ├── jobs/                # 단일 시장 daily, 설정 기반 update-all·update-stock
+│   ├── jobs/                # daily·update-all·update-stock, HAA ETF 수집·조회
 │   ├── domain/              # Snapshot, RuleResult, Verdict 데이터 모델
-│   ├── strategies/          # 전략 규약·등록소·추세 전략 예제
+│   ├── strategies/          # 전략 규약·추세 전략, HAA 포트폴리오 계산
 │   └── screening/           # 전략 평가 결과의 후보 여부 판정
 ├── config/
 │   ├── settings.toml        # 갱신 시장·보관 시작일·RS 기간·DB 경로
@@ -68,6 +68,7 @@ RS는 필요한 거래일 가격이 모두 있는 종목만 계산하고 제외 
 | [DB 사용법](docs/database.md) | Python API·CLI, 데이터 정의, 실행 한계 |
 | [스키마 설명](docs/schema-comments.md) | 테이블·컬럼별 한국어 설명 |
 | [지표 계산식·검증](docs/price-detail.md) | price_detail의 컬럼별 수식, 초기화·누락 처리, 저장값 검증 결과 |
+| [HAA 전략](docs/haa.md) | HAA-Balanced 규칙, 최신일·월말 판단, ETF 수집 및 누락 처리 |
 | [기존 DB 대응](docs/legacy-schema.md) | 기존 스키마와의 대응 및 이관 시 고려 사항 |
 
 ## 시작
@@ -110,6 +111,19 @@ quantfoundry --help
 
 활성화가 정책으로 차단되면 실행 파일 직접 호출 방식을 사용한다.
 모듈 실행도 동일하다: `.\.venv\Scripts\python.exe -m quantfoundry --help`.
+
+## HAA 전략 조회
+
+```powershell
+quantfoundry update-haa  # 필요한 ETF 10개 가격 수집·갱신
+quantfoundry -q haa      # 저장 데이터 최신일 기준 의사 결정과 근거
+```
+
+Wouter Keller·Jan Willem Keuning의 HAA-Balanced를 구현한다. 최신 기준일, 목표 비중,
+TIP 경보 판단, 자산 순위와 1·3·6·12개월 수익률을 출력한다. 월중에는 잠정 신호와
+최근 월말 보유 목표를 구분한다. ETF 가격 누락 시 판단을 보류하고 부족한 종목·날짜를 안내한다.
+조회는 읽기 전용이며 실제 주문은 실행하지 않는다. `update-all`과 별도로 ETF를 갱신한다.
+상세 규칙과 기준일 정의는 [HAA 전략 문서](docs/haa.md)를 참고한다.
 
 ## 전체 갱신: 한 명령
 
@@ -212,7 +226,7 @@ quantfoundry daily --db var/data/quantfoundry.sqlite3 --market NASDAQ --sessions
 
 이 명령의 sessions 파일은 해당 시장의 완료 거래일 JSON 배열이며 기본 RS에 최소 253개가 필요하다.
 간편 실행에는 위의 `update-all`을 권장한다. 두 명령 모두 현재는 데이터 갱신까지 수행하고,
-전략 평가와 후보 저장은 미구현이다.
+전략 평가를 자동 실행하지 않는다. HAA는 별도 `-q haa` 명령으로 조회하며 후보 저장은 미구현이다.
 
 Raspberry Pi/Linux: `.venv/bin/python -m pip install -e ".[market-data]"` 설치 후
 `.venv/bin/quantfoundry update-all`. 실제 ARM 실행은 별도 검증이 필요하다.

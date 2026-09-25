@@ -104,7 +104,18 @@ def update_price(db, market, bars, *, source):
         for ticker, day in dirty.items():
             conn.execute("DELETE FROM price_detail WHERE ticker=? AND market=? AND date>=?", (ticker,market,day))
         if dirty:
-            conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date>=?", (market,min(dirty.values())))
+            # A dedicated ETF outside the stock universe cannot change stock RS.
+            listed = {r[0] for r in conn.execute(
+                "SELECT ticker FROM stock WHERE market=? AND in_current_listing=1", (market,))}
+            affected = [day for ticker, day in dirty.items() if ticker in listed]
+            if affected:
+                conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date>=?", (market, min(affected)))
+            # Removed listings may still participate in a historical RS universe.
+            historical = conn.execute("SELECT DISTINCT date,universe_json FROM rs_rating_history WHERE market=? AND date>=?",
+                                      (market, min(dirty.values()))).fetchall()
+            for day, universe in historical:
+                if any(t in dirty and dirty[t] <= day for t in json.loads(universe)):
+                    conn.execute("DELETE FROM rs_rating_history WHERE market=? AND date=?", (market, day))
     return PriceUpdate(inserted, revised, unchanged)
 
 

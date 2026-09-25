@@ -28,7 +28,7 @@ class UpdateReport:
 
 
 def update_market_prices(db, market, sessions, *, provider=None, attempts=2, retry_delay=2,
-                         workers=4, timeout=10, downloader=None):
+                         workers=4, timeout=10, downloader=None, tickers=None):
     """Refresh FULL retained history with bounded downloads and serial DB writes.
 
     Caller supplies completed exchange sessions. New listings may have no prefix
@@ -36,6 +36,7 @@ def update_market_prices(db, market, sessions, *, provider=None, attempts=2, ret
     Valid available rows are saved even when some expected dates are absent.
     Dropping previously stored dates still requires explicit reconciliation.
     Use a stable start date <= earliest retained price to reconcile adjusted prices.
+    Explicit tickers refresh a fixed universe without replacing stock listings.
     Only network retrieval is retried; validation/DB errors are reported per ticker.
     """
     market = market_name(market)
@@ -47,10 +48,17 @@ def update_market_prices(db, market, sessions, *, provider=None, attempts=2, ret
                                                                attempts=attempts, retry_delay=retry_delay))
     provider = provider or YahooProvider(timeout=downloader.options.timeout)
     with db.connection() as conn:
-        earliest = conn.execute("SELECT MIN(date) FROM price WHERE market=?", (market,)).fetchone()[0]
+        if tickers is not None:
+            from .validation import ticker_name
+            tickers = tuple(dict.fromkeys(ticker_name(t) for t in tickers))
+            earliest = min((r[0] for t in tickers for r in conn.execute(
+                "SELECT MIN(date) FROM price WHERE market=? AND ticker=?", (market, t)) if r[0]), default=None)
+        else:
+            earliest = conn.execute("SELECT MIN(date) FROM price WHERE market=?", (market,)).fetchone()[0]
         if earliest and start > earliest:
             raise ValueError("Adjusted price refresh must cover the earliest stored date")
-        tickers = [r[0] for r in conn.execute("SELECT ticker FROM stock WHERE market=? AND in_current_listing=1 ORDER BY ticker", (market,))]
+        if tickers is None:
+            tickers = [r[0] for r in conn.execute("SELECT ticker FROM stock WHERE market=? AND in_current_listing=1 ORDER BY ticker", (market,))]
     if not tickers:
         raise ValueError("Update stock listings before downloading prices")
     report = UpdateReport(uuid.uuid4().hex)
