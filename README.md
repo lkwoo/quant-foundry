@@ -67,6 +67,7 @@ RS는 필요한 거래일 가격이 모두 있는 종목만 계산하고 제외 
 | [아키텍처](docs/architecture.md) | 모듈 책임, 전략 확장 원칙, 향후 설계 |
 | [DB 사용법](docs/database.md) | Python API·CLI, 데이터 정의, 실행 한계 |
 | [스키마 설명](docs/schema-comments.md) | 테이블·컬럼별 한국어 설명 |
+| [지표 계산식·검증](docs/price-detail.md) | price_detail의 컬럼별 수식, 초기화·누락 처리, 저장값 검증 결과 |
 | [기존 DB 대응](docs/legacy-schema.md) | 기존 스키마와의 대응 및 이관 시 고려 사항 |
 
 ## 시작

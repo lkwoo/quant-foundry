@@ -74,6 +74,8 @@ update-all CLI는 config/settings.toml의 DB·시장·시작일·lookback을 읽
 
 ## 계산 정의
 
+컬럼별 수식과 실제 저장값 검증 결과는 [price_detail 계산식](price-detail.md)을 참고한다.
+
 SMA 50/120/150/200: N개 관측값 미만이면 NULL.
 EMA 5/12/20/26/40: 첫 종가 seed, 이후 alpha=2/(N+1).
 MACD: EMA12-26 및 EMA5-20/5-40/20-40. Signal: 각 MACD의 EMA9, 최초 MACD seed.
