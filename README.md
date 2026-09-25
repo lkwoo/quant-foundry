@@ -11,7 +11,7 @@
 | 갱신 작업 | 설정 기반 전체 갱신, 종목 목록의 원자적 교체, 동시 4개 가격 수집, 오류별 재시도·진행 로그 |
 | 저장 | SQLite 스키마 v3, 가격 정정 이력, 정정에 따른 지표 무효화·재계산, 한국어 스키마 설명 |
 | 지표 | SMA·EMA·MACD·Signal·Stage, 거래일 기반 RS와 명시적인 적격 종목군 계산 |
-| 전략 | HAA-Balanced 목표 비중·판단 근거 조회, 추세 전략 예제, PASS/FAIL/UNKNOWN 기반 후보 판정 함수 |
+| 전략 | MA Stage 1·6 Top 10·개별 Stage 조회, HAA-Balanced 목표 비중·판단 근거, 추세 전략 예제 |
 | 검증 | 임시 DB와 공급자 대역을 사용하는 오프라인 테스트, 선택적 거래소 캘린더 테스트 |
 
 일일 작업과 전략 평가의 연결, 후보 결과 저장, 기존 DB 이관, 백테스트,
@@ -30,9 +30,9 @@ QuantFoundry/
 │   ├── providers/           # FinanceDataReader·Yahoo 공급자 어댑터
 │   ├── storage/             # SQLite 스키마·트랜잭션·갱신·스키마 설명
 │   ├── indicators/          # 공통 지표 정의와 순수 계산
-│   ├── jobs/                # daily·update-all·update-stock, HAA ETF 수집·조회
+│   ├── jobs/                # daily·update-all·update-stock, HAA ETF 수집·조회, MA 시장·종목 조회
 │   ├── domain/              # Snapshot, RuleResult, Verdict 데이터 모델
-│   ├── strategies/          # 전략 규약·추세 전략, HAA 포트폴리오 계산
+│   ├── strategies/          # 전략 규약·추세 전략, HAA 계산, MA Stage·자체 RS 순위
 │   └── screening/           # 전략 평가 결과의 후보 여부 판정
 ├── config/
 │   ├── settings.toml        # 갱신 시장·보관 시작일·RS 기간·DB 경로
@@ -69,6 +69,7 @@ RS는 필요한 거래일 가격이 모두 있는 종목만 계산하고 제외 
 | [스키마 설명](docs/schema-comments.md) | 테이블·컬럼별 한국어 설명 |
 | [지표 계산식·검증](docs/price-detail.md) | price_detail의 컬럼별 수식, 초기화·누락 처리, 저장값 검증 결과 |
 | [HAA 전략](docs/haa.md) | HAA-Balanced 규칙, 최신일·월말 판단, ETF 수집 및 누락 처리 |
+| [이동평균선 전략](docs/ma.md) | 고지로 Stage 조회, Stage 1·6 Top 10 선정 기준, 자체 RS와 기준일 |
 | [기존 DB 대응](docs/legacy-schema.md) | 기존 스키마와의 대응 및 이관 시 고려 사항 |
 
 ## 시작
@@ -111,6 +112,21 @@ quantfoundry --help
 
 활성화가 정책으로 차단되면 실행 파일 직접 호출 방식을 사용한다.
 모듈 실행도 동일하다: `.\.venv\Scripts\python.exe -m quantfoundry --help`.
+
+## 이동평균선 스테이지 조회
+
+```powershell
+quantfoundry -q ma KOSPI    # Stage 1·6 각각 Top 10
+quantfoundry -q ma NASDAQ
+quantfoundry -q ma 005930   # .KS 생략 가능, KOSDAQ은 .KQ 생략 가능
+quantfoundry -q ma AAPL     # 현재 Stage와 EMA 배열·방향
+```
+
+KOSPI·KOSDAQ·NASDAQ·NYSE를 지원하며 항상 **판단 기준일**을 표시한다.
+고지로의 EMA5·EMA20·EMA40 배열로 Stage를 분류하고, 시장별 Top 10은 같은 날짜의
+252거래일 수익률 기반 자체 RS → 수익률 → 종목코드 순으로 정렬한다.
+이 자체 RS는 IBD 공식 RS Rating과 다르며 미너비니의 상대강도 우선 원칙을 참고한 프로젝트 정책이다.
+가격·지표는 `update-all`로 갱신하고 조회는 읽기 전용이다. 상세 기준은 [이동평균선 전략](docs/ma.md)을 참고한다.
 
 ## HAA 전략 조회
 

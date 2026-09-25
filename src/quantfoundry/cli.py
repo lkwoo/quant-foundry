@@ -9,7 +9,7 @@ from .strategies.registry import STRATEGIES
 
 def main():
     parser = argparse.ArgumentParser(description="QuantFoundry")
-    parser.add_argument("-q", "--query", choices=["haa"], help="Read-only portfolio decision")
+    parser.add_argument("-q", "--query", nargs="+", metavar="QUERY", help="haa | ma MARKET | ma TICKER (read-only)")
     parser.add_argument("--db", dest="query_db", help="Database for -q")
     parser.add_argument("--config", dest="query_config", help="Settings TOML for -q")
     sub = parser.add_subparsers(dest="command")
@@ -38,9 +38,16 @@ def main():
     if args.query:
         if args.command:
             parser.error("-q cannot be combined with a subcommand")
-        from .jobs.haa import query_haa
+        query = args.query[0].lower()
+        if not ((query == "haa" and len(args.query) == 1) or (query == "ma" and len(args.query) == 2)):
+            parser.error("사용법: -q haa | -q ma MARKET | -q ma TICKER")
         try:
-            output, success = query_haa(config=args.query_config, database=args.query_db)
+            if query == "haa":
+                from .jobs.haa import query_haa
+                output, success = query_haa(config=args.query_config, database=args.query_db)
+            else:
+                from .jobs.ma import query_ma
+                output, success = query_ma(args.query[1], config=args.query_config, database=args.query_db)
             print(output)
             if not success:
                 raise SystemExit(1)
@@ -53,6 +60,7 @@ def main():
         parser.print_help()
         return
     if args.command == "strategies":
+        print("ma EMA5/20/40 stage, market Top 10 (quantfoundry -q ma MARKET|TICKER)")
         print("haa HAA-Balanced (quantfoundry -q haa)")
         for name, strategy in STRATEGIES.items():
             print(f"{name} v{strategy.version}")
