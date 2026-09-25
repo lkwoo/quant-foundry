@@ -4,11 +4,14 @@ import unittest
 from unittest.mock import Mock, patch
 from datetime import date
 from quantfoundry.providers.market import YahooProvider
-from quantfoundry.providers.errors import DataUnavailableError, RateLimitError, TransientDownloadError
+from quantfoundry.providers.errors import (DataUnavailableError, RateLimitError, TransientDownloadError,
+                                         SymbolLookupError, ProviderResponseError)
 
 
 class MissingPrices(Exception):
-    pass
+    def __init__(self, message, yahoo_reason=None):
+        super().__init__(message)
+        self.yahoo_reason = yahoo_reason
 
 
 class MissingTimezone(Exception):
@@ -58,14 +61,26 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(bars[0].close,110)
         self.assertEqual(bars[0].volume,0)
 
-    def test_empty_response_is_error(self):
+    def test_malformed_response_is_not_no_data(self):
         self.history.return_value = None
-        with self.assertRaises(DataUnavailableError):
+        with self.assertRaises(ProviderResponseError):
             YahooProvider().fetch_prices("A","2024-01-01","2024-01-03")
 
+    def test_empty_valid_frame_is_no_data(self):
+        self.history.return_value = types.SimpleNamespace(empty=True, columns=("Close", "Adj Close", "Volume"))
+        with self.assertRaises(DataUnavailableError):
+            YahooProvider().fetch_prices("A", "2024-01-01", "2024-01-03")
+
+    def test_missing_columns_is_not_no_data(self):
+        self.history.return_value = types.SimpleNamespace(empty=True, columns=())
+        with self.assertRaises(ProviderResponseError):
+            YahooProvider().fetch_prices("A", "2024-01-01", "2024-01-03")
+
     def test_error_classification_preserves_retry_and_cooldown_signals(self):
-        for error, expected in ((MissingPrices("empty"), DataUnavailableError),
-                                (MissingTimezone("no timezone"), DataUnavailableError),
+        for error, expected in ((MissingPrices("empty", "No data found, symbol may be delisted"), DataUnavailableError),
+                                (MissingPrices("unknown"), ProviderResponseError),
+                                (MissingPrices("auth", "Invalid Crumb"), ProviderResponseError),
+                                (MissingTimezone("no timezone"), SymbolLookupError),
                                 (Limited("429"), RateLimitError),
                                 (HttpFailure(429), RateLimitError),
                                 (HttpFailure(503), TransientDownloadError),

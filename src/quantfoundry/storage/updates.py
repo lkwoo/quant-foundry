@@ -134,7 +134,8 @@ def update_price_detail(db, market, tickers=None):
     return count
 
 
-def update_rs_rating_history(db, market, sessions, *, lookback=252, missing_policy="error"):
+def update_rs_rating_history(db, market, sessions, *, lookback=252, missing_policy="error",
+                             excluded_tickers=None):
     """Compute the LAST supplied completed session for the current listing universe.
 
     sessions must be an authoritative exchange calendar (ascending ISO dates).
@@ -143,6 +144,8 @@ def update_rs_rating_history(db, market, sessions, *, lookback=252, missing_poli
     Opt-in missing_policy="exclude" ranks only complete instruments and returns
     every exclusion reason. Its distinct calculation_version records this policy.
     No eligible instruments means no fabricated ranks and INSUFFICIENT_DATA.
+    excluded_tickers explicitly prevents stale prices from failed/no-data downloads
+    entering a current run's ranking; only supported with missing_policy="exclude".
     Percentile follows legacy PERCENT_RANK: floor(100*(rank-1)/(n-1)), capped at 99.
     Ties share the lowest rank; a singleton ranks zero. This is current-universe
     screening, not a point-in-time historical-universe backtest.
@@ -155,13 +158,23 @@ def update_rs_rating_history(db, market, sessions, *, lookback=252, missing_poli
     start, end = window[0], window[-1]
     if missing_policy not in ("error", "exclude"):
         raise ValueError("missing_policy must be error or exclude")
+    if excluded_tickers is not None and missing_policy != "exclude":
+        raise ValueError("excluded_tickers requires missing_policy=exclude")
+    run_exclusions = {} if excluded_tickers is None else dict(excluded_tickers)
+    if any(not isinstance(reason, str) or not reason for reason in run_exclusions.values()):
+        raise ValueError("Every excluded ticker must have a reason")
     excluded, returns, rejected = [], [], {}
     version = "rs-v1-session-window" if missing_policy == "error" else "rs-v2-eligible-session-window"
+    if excluded_tickers is not None:
+        version = "rs-v3-run-eligible-session-window"
     with db.transaction() as conn:
         tickers = [r[0] for r in conn.execute("SELECT ticker FROM stock WHERE market=? AND in_current_listing=1 ORDER BY ticker", (market,))]
         if not tickers:
             raise ValueError("No current listing universe")
         for ticker in tickers:
+            if ticker in run_exclusions:
+                rejected[ticker] = run_exclusions[ticker]
+                continue
             prices = {r[0]: r[1] for r in conn.execute("SELECT date,adj_close FROM price WHERE market=? AND ticker=? AND date BETWEEN ? AND ? ORDER BY date", (market,ticker,start,end))}
             if end not in prices:
                 if missing_policy == "exclude":

@@ -65,7 +65,7 @@ class DownloadTests(unittest.TestCase):
         def fetch(ticker, start, end):
             calls[ticker] += 1
             if ticker == "MISSING":
-                raise DataUnavailableError("no timezone")
+                raise DataUnavailableError("no price data")
             if ticker == "INVALID":
                 raise ValueError("bad response")
             if ticker == "BUG":
@@ -145,7 +145,7 @@ class DownloadTests(unittest.TestCase):
 
 
 class ConcurrentUpdateTests(unittest.TestCase):
-    def test_single_writer_partial_persistence_and_progress(self):
+    def test_single_writer_no_data_is_not_failure_and_derived_updates_continue(self):
         with tempfile.TemporaryDirectory() as directory:
             db = Database(Path(directory) / "test.sqlite3")
             db.initialize()
@@ -171,16 +171,19 @@ class ConcurrentUpdateTests(unittest.TestCase):
                 result = update_all(db, "NYSE", days, provider=provider, lookback=2)
             self.assertEqual(set(connection_threads), {threading.get_ident()})
             self.assertEqual(len(worker_threads), 4)
-            self.assertEqual(result["prices"]["status"], "PARTIAL")
+            self.assertEqual(result["prices"]["status"], "SUCCESS")
+            self.assertEqual(result["prices"]["no_data"], {"B": "no data"})
+            self.assertEqual(result["prices"]["failed"], {})
             self.assertEqual(set(result["prices"]["succeeded"]), {"A", "C", "D"})
             self.assertEqual(provider.fetch_prices.call_count, 4)
-            self.assertIsNone(result["details"])
-            self.assertIsNone(result["rs"])
+            self.assertEqual(result["details"], 9)
+            self.assertEqual(result["rs"]["ranked"], 3)
+            self.assertEqual(result["rs"]["excluded"], {"B": "no_price_data"})
             self.assertIn("4/4", output.getvalue())
-            self.assertIn("B FAILED: DataUnavailableError", output.getvalue())
+            self.assertIn("B NO_DATA:", output.getvalue())
             with db.connection() as conn:
                 self.assertEqual(conn.execute("SELECT count(*) FROM price").fetchone()[0], 9)
-                self.assertEqual(conn.execute("SELECT status FROM update_runs").fetchone()[0], "PARTIAL")
+                self.assertEqual(conn.execute("SELECT status FROM update_runs").fetchone()[0], "SUCCESS")
 
     def test_validation_failure_does_not_retry_or_write_bad_prices(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -188,9 +191,9 @@ class ConcurrentUpdateTests(unittest.TestCase):
             db.initialize()
             update_stock(db, "NYSE", ["A"])
             provider = Mock(source="fixture")
-            provider.fetch_prices.return_value = [PriceBar("A", "2024-01-01", 100), PriceBar("A", "2024-01-03", 100)]
+            provider.fetch_prices.return_value = [PriceBar("A", "2024-01-01", 100), PriceBar("A", "2024-01-02", 100)]
             with contextlib.redirect_stderr(io.StringIO()):
-                report = update_market_prices(db, "NYSE", ["2024-01-01", "2024-01-02", "2024-01-03"], provider=provider)
+                report = update_market_prices(db, "NYSE", ["2024-01-01", "2024-01-03"], provider=provider)
             provider.fetch_prices.assert_called_once()
             self.assertEqual(report.status, "FAILED")
             with db.connection() as conn:

@@ -33,7 +33,7 @@ update_price_detail(db, "NASDAQ")
 | update_price_detail(db, market, tickers=None) | SMA/EMA/MACD/Signal/Stage 계산·저장. 변경 없는 종목은 생략 |
 | update_rs_rating_history(db, market, sessions, lookback=252) | 마지막 거래일의 동일 시장 RS 갱신. 제외된 짧은 이력 종목 반환 |
 | update_market_prices(db, market, sessions, provider=None, workers=4, timeout=10, attempts=2) | 등록 종목의 가격을 병렬 수집하고 순차 저장. 실패 종목·실행 ID 반환 |
-| update_all(db, market, sessions, provider=None, lookback=252) | FDR 목록→가격→지표→RS. 가격 부분 실패 시 파생 갱신 생략 |
+| update_all(db, market, sessions, provider=None, lookback=252) | FDR 목록→가격→성공 종목 지표→완전한 기간을 갖춘 종목의 RS |
 
 ## 실 API 호출
 
@@ -93,14 +93,17 @@ RS: 실제 거래일 window 내 모든 가격이 있는 종목만 수익률을 �
 ## 실행·성능·한계
 
 가격 갱신은 보관 시작일부터 재조회하여 조정가격 변경을 포착한다. 기존 가격 날짜를
-공급자가 누락하거나 내부 세션이 빠지면 해당 종목 저장을 거부한다. 신규 종목은 첫
+공급자가 누락하면 해당 종목 저장을 거부한다. 새로 조회한 기간의 일부 거래일이 없으면
+유효한 행은 적재하고 누락 건수·날짜 예시를 보고한다. 캘린더 밖 날짜와 잘못된 가격은 거부한다. 신규 종목은 첫
 응답 날짜 이전 이력이 없어도 수집하며, 충분한 관측 기간은 지표/RS 단계에서 판단한다.
-성공한 종목은 개별 커밋, 실패는 report.failed에 기록한다. 오류를 삼켜 성공 처리하지 않는다.
+성공한 종목은 개별 커밋하고 명시적 데이터 없음은 `report.no_data`, 누락 거래일은
+`report.missing_sessions`에 기록한다. 실제 오류는 `report.failed`와 `failure_categories`에 기록한다.
 update_runs의 상태는 가격 수집 단계의 상태다. 지표/RS의 후속 실패는 예외로 전달된다.
 전체 시장 작업 하나가 단일 트랜잭션인 것은 아니다. 파생 지표도 종목 단위로 커밋한다.
 
 종목별 병렬 수집(기본 4개)과 단일 DB writer를 사용한다. 일시적 통신 오류만 기본 총 2회
-시도하고, 데이터·시간대 없음은 즉시 실패로 기록한다. 요청 제한이면 신규 요청을 기본 30초
+시도하고, 명시적 데이터 없음은 오류가 아닌 `NO_DATA`로 기록한다. 시간대 조회 실패는
+데이터 부재로 확정하지 않고 별도 오류로 구분한다. 요청 제한이면 신규 요청을 기본 30초
 중단하고 동시 수를 최대 2개로 낮춘다. 설정과 진행 로그는 [README](../README.md#병렬-수집과-실패-처리)를 참고한다.
 full-history 다운로드의 네트워크 비용은 여전히 크므로 실제 처리량을 측정한 뒤
 정정 탐지 기반 증분 수집으로 확장한다. API 호출을 기다리는 동안 DB 트랜잭션을 열어 두지 않는다.
@@ -137,9 +140,11 @@ TEMP stock_stage 적재·건수 확인 → instruments에 신규 키 등록 → 
 교체에서 현재 없는 행을 제거한다. 기존 in_current_listing 컬럼은 호환 목적으로 유지하지만
 정상 교체된 stock의 모든 행은 1이다. 자동 가격 적재는 instruments만 보충한다.
 
-현재 사용자 DB의 price_detail/RS가 빈 이유는 가격 수집 PARTIAL/FAILED 이후 계산 생략 정책이다.
-이번 수정은 stock 스냅샷의 완전 교체와 실패 시 보존에 한정한다. 가격 API 심볼 변환,
-거래일 불일치, 부분 성공 시 파생 계산 범위는 별도 개선 항목이다.
+`update-all`·`daily`는 가격 수집이 부분 실패해도 이번에 적재·검증한 종목의 지표를 계산한다.
+RS는 `missing_policy="exclude"`와 이번 실행의 실패/데이터 부재 종목 제외 목록을 사용한다.
+실패 종목의 기존 가격을 최신 조회에 성공한 것처럼 순위에 포함하지 않는다.
+종목군은 `universe_json`, 실행별 제외 정책은 `rs-v3-run-eligible-session-window`로 기록한다.
+데이터 부재·누락으로 계산할 수 없으면 결과의 제외 사유와 `INSUFFICIENT_DATA`를 확인한다.
 
 ## 기존 가격만으로 파생 데이터 생성
 
@@ -152,4 +157,5 @@ RS의 기본 missing_policy="error"는 유지한다. 사용자가 이미 저장�
 일부 제외되면 PARTIAL_UNIVERSE를 반환한다. 가격을 보간하거나 기간을 줄이지 않는다.
 CLI: update-rs ... --missing-policy exclude. 부분 집합/데이터 부족 결과의 종료 코드는 1이다.
 기준일은 저장된 시장별 최신 price.date를 사용해야 하며 데이터가 오늘까지 갱신된 것으로
-해석하면 안 된다. 원천 수집의 실패 정책이나 update-all의 기본 RS 정책은 바꾸지 않는다.
+해석하면 안 된다. 독립 `update-rs`는 기존 기본 검증과 종료 코드 정책을 유지하며,
+`update-all`·`daily`는 위에 설명한 실행별 적격 종목군 정책을 사용한다.

@@ -2,7 +2,15 @@
 
 
 class DataUnavailableError(ValueError):
-    """No usable data this run; do not infer permanent delisting."""
+    """Nonfatal no-price-data signal; recorded as NO_DATA, not as a failure."""
+
+
+class SymbolLookupError(ValueError):
+    """The provider could not resolve a symbol; absence of prices is unconfirmed."""
+
+
+class ProviderResponseError(ValueError):
+    """Malformed or ambiguous provider response, not confirmed absence of data."""
 
 
 class TransientDownloadError(Exception):

@@ -92,7 +92,7 @@ price.adj_close 기반의 일별 기술적 지표. 가격 정정 이후 무효�
 | `lookback` | 수익률 계산에 사용한 거래세션 간격. 기본 252이며 시작일·종료일 포함 lookback+1개 가격 관측값이 필요하다. |
 | `universe_size` | 해당 시장·기준일 순위 산정에 실제 참여한 종목 수. 이력이 부족해 제외된 종목은 포함하지 않는다. |
 | `universe_json` | 해당 순위 계산에 참여한 티커의 정렬된 JSON 배열. 비교 집합을 기록하며 거래소 전체 상장 종목 목록과 다를 수 있다. |
-| `calculation_version` | RS 계산 정의의 버전. rs-v1-session-window는 누락 시 중단하는 기본 정책이며 rs-v2-eligible-session-window는 완전한 이력의 종목만 포함하는 명시적 제외 정책이다. 후자의 순위는 전체 시장 순위가 아니다. |
+| `calculation_version` | RS 계산 정의의 버전. rs-v1-session-window는 누락 시 중단하는 기본 정책, rs-v2-eligible-session-window는 완전한 이력만 포함하는 명시적 제외 정책, rs-v3-run-eligible-session-window는 이번 가격 수집의 실패·데이터 부재 종목도 제외하는 정책이다. 제외 정책의 순위는 전체 시장 순위가 아니다. |
 | `insert_time` | RS 결과를 저장한 UTC 시각. 같은 기준일을 다시 계산하면 새 저장 시각으로 교체된다. |
 
 ## price_revisions
@@ -119,8 +119,8 @@ price.adj_close 기반의 일별 기술적 지표. 가격 정정 이후 무효�
 | `market` | 주식 상장 시장. KOSPI, KOSDAQ, NASDAQ, NYSE 중 하나이며 ticker와 함께 종목을 식별한다. |
 | `start_date` | 이번 가격 조회 요청의 시작 거래일. YYYY-MM-DD, 포함 범위이며 공급자별 상장 이력은 더 짧을 수 있다. |
 | `as_of` | 이번 가격 조회 요청의 마지막 완료 거래일. YYYY-MM-DD, 포함 범위. 요청 목표일이며 모든 종목의 저장 성공을 보장하지 않는다. |
-| `status` | 가격 수집 단계 상태: RUNNING 진행 중, SUCCESS 모든 대상 성공, PARTIAL 성공·실패 혼재, FAILED 전체 실패 또는 중단. 지표/RS 단계 상태와는 별개다. |
-| `result_json` | 실행 결과 JSON: run_id, status, inserted, revised, unchanged, succeeded(티커 배열), failed(티커별 오류 객체). 시작 직후나 강제 종료 시 NULL일 수 있다. |
+| `status` | 가격 수집 단계 상태: RUNNING 진행 중, SUCCESS 실제 오류 없음, PARTIAL 적재 성공·실패 혼재, FAILED 적재 성공 없이 실패 발생 또는 중단. 데이터 부재·누락 기록만으로 실패하지 않으므로 SUCCESS가 전체 종목의 완전성을 뜻하지 않는다. 지표/RS 단계 상태와는 별개다. |
+| `result_json` | 실행 결과 JSON: run_id, status, inserted, revised, unchanged, succeeded(적재·검증한 티커), no_data(명시적 데이터 부재), missing_sessions(누락 건수·날짜 예시), failed(오류), failure_categories(오류 분류). 시작 직후나 강제 종료 시 NULL일 수 있다. |
 | `started_at` | 가격 수집 실행 기록을 생성한 UTC 시각. |
 | `finished_at` | 가격 수집 실행 결과를 기록한 UTC 시각. 실행 중 또는 결과 기록 전 강제 종료되면 NULL이다. |
 

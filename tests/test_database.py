@@ -181,4 +181,5 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(ValueError):update_market_prices(self.db,"NASDAQ",dates[1:],provider=provider)
         provider.fetch_prices.return_value=[PriceBar("A","2024-01-01",100),PriceBar("A","2024-01-03",100)]
         report=update_market_prices(self.db,"NASDAQ",dates,provider=provider,attempts=1)
-        self.assertIn("Missing",report.failed["A"])
+        self.assertIn("dropped",report.failed["A"])
+        self.assertEqual(report.missing_sessions["A"], {"count": 1, "sample": ["2024-01-02"]})

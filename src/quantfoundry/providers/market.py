@@ -2,7 +2,8 @@
 from datetime import date, timedelta
 from ..data.validation import market_name
 from ..storage.updates import PriceBar
-from .errors import DataUnavailableError, RateLimitError, TransientDownloadError
+from .errors import (DataUnavailableError, RateLimitError, TransientDownloadError,
+                     SymbolLookupError, ProviderResponseError)
 
 
 class YahooProvider:
@@ -32,8 +33,15 @@ class YahooProvider:
         try:
             frame = yf.Ticker(ticker).history(start=start, end=exclusive_end, auto_adjust=False,
                                              actions=False, timeout=self.timeout, raise_errors=True)
-        except (YFPricesMissingError, YFTzMissingError) as exc:
-            raise DataUnavailableError(str(exc)) from exc
+        except YFPricesMissingError as exc:
+            reason = getattr(exc, "yahoo_reason", None)
+            # yfinance also uses this exception for malformed JSON responses.
+            # Only Yahoo's explicit no-data response confirms absence of prices.
+            if reason and ("no data found" in reason.lower() or "no price data" in reason.lower()):
+                raise DataUnavailableError(str(exc)) from exc
+            raise ProviderResponseError(f"Unconfirmed missing prices: {exc}") from exc
+        except YFTzMissingError as exc:
+            raise SymbolLookupError(str(exc)) from exc
         except YFRateLimitError as exc:
             raise RateLimitError(str(exc)) from exc
         except (CurlConnectionError, Timeout) as exc:
@@ -46,8 +54,10 @@ class YahooProvider:
                 raise TransientDownloadError(str(exc)) from exc
             raise
         required = ("Close", "Adj Close", "Volume")
-        if frame is None or frame.empty or any(c not in frame.columns for c in required):
-            raise DataUnavailableError(f"Empty or malformed price response: {ticker}")
+        if frame is None or any(c not in frame.columns for c in required):
+            raise ProviderResponseError(f"Malformed price response: {ticker}")
+        if frame.empty:
+            raise DataUnavailableError(f"No prices in requested range: {ticker}")
         return [PriceBar(ticker, index.date().isoformat(), row["Adj Close"],
                          None if row["Volume"] != row["Volume"] else row["Volume"], row["Close"])
                 for index, row in frame.iterrows()]

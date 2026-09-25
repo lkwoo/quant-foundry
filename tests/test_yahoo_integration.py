@@ -6,7 +6,8 @@ import unittest
 from unittest.mock import Mock, patch
 
 from quantfoundry.data.downloads import PriceDownloader
-from quantfoundry.providers.errors import DataUnavailableError, RateLimitError, TransientDownloadError
+from quantfoundry.providers.errors import (DataUnavailableError, RateLimitError, TransientDownloadError,
+                                         SymbolLookupError, ProviderResponseError)
 from quantfoundry.providers.market import YahooProvider
 
 
@@ -47,6 +48,7 @@ class YahooIntegrationTests(unittest.TestCase):
         response = Mock(text="fixture", json=lambda: {"chart": {"result": None,
                         "error": {"description": "No data found, symbol may be delisted"}}})
         for cause, expected in ((response, DataUnavailableError), (YFRateLimitError(), RateLimitError),
+                                (Mock(text="fixture", json=lambda: {}), ProviderResponseError),
                                 (Timeout("timeout"), TransientDownloadError)):
             def get(*args, **kwargs):
                 if isinstance(cause, Exception):
@@ -56,7 +58,7 @@ class YahooIntegrationTests(unittest.TestCase):
                 with self.assertRaises(expected):
                     YahooProvider().fetch_prices("A", "2024-01-02", "2024-01-03")
         with patch.object(TickerBase, "_get_ticker_tz", return_value=None), patch.object(YfData, "get") as get, patch.object(YfData, "cache_get") as cached:
-            with self.assertRaises(DataUnavailableError):
+            with self.assertRaises(SymbolLookupError):
                 YahooProvider().fetch_prices("A", "2024-01-02", "2024-01-03")
             get.assert_not_called()
             cached.assert_not_called()
